@@ -1,8 +1,8 @@
-import Home from "./pages/Home";
 import "./App.css";
+import Triage from "./pages/Triage";
 
 function App() {
-  return <Home />;
+  return <Triage />;
 }
 
 export default App;

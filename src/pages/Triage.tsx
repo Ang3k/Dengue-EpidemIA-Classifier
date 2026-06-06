@@ -32,7 +32,7 @@ const grupos = [
   },
 ];
 
-function Home() {
+function Triage() {
   const [patientData, setPatientData] = useState<PatientData>({
     idade: "",
     sexo: "",
@@ -100,15 +100,15 @@ function Home() {
           );
         })}
 
-        <Resultado
-          title={resultado.title}
-          message={resultado.message}
-          level={resultado.level}
-          points={resultado.points}
-        />
+    <Resultado
+  title={resultado.title}
+  message={resultado.message}
+  level={resultado.level}
+  models={resultado.models}
+/>
       </section>
     </main>
   );
 }
 
-export default Home;
+export default Triage;
