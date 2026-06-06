@@ -4,6 +4,7 @@ import PatientForm from "../components/PatientForm";
 import Resultado from "../components/Resultado";
 import { avaliarDengue, triageItems } from "../services/dengueRules";
 import type { PatientData } from "../types/patient";
+import { Link } from "react-router-dom";
 
 const grupos = [
   {
@@ -100,12 +101,18 @@ function Triage() {
           );
         })}
 
-    <Resultado
-  title={resultado.title}
-  message={resultado.message}
-  level={resultado.level}
-  models={resultado.models}
-/>
+        <Resultado
+          title={resultado.title}
+          message={resultado.message}
+          level={resultado.level}
+          models={resultado.models}
+        />
+
+        <div style={{ marginTop: 20 }}>
+          <Link to="/" className="secondary">
+            Voltar para Home
+          </Link>
+        </div>
       </section>
     </main>
   );
