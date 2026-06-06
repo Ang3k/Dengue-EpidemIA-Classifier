@@ -100,12 +100,12 @@ function Home() {
           );
         })}
 
-        <Resultado
-          title={resultado.title}
-          message={resultado.message}
-          level={resultado.level}
-          points={resultado.points}
-        />
+    <Resultado
+  title={resultado.title}
+  message={resultado.message}
+  level={resultado.level}
+  models={resultado.models}
+/>
       </section>
     </main>
   );

@@ -271,4 +271,101 @@ h1 {
   .form-grid {
     grid-template-columns: 1fr;
   }
+} 
+
+.modelos-container {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.modelo-card {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.modelo-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.modelo-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  background: #ecfeff;
+  border: 1px solid #a5f3fc;
+}
+
+.modelo-card h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #0f172a;
+}
+
+.modelo-card strong {
+  display: block;
+  margin-top: 4px;
+  color: #0f766e;
+  font-size: 15px;
+}
+
+.modelo-card p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #475569;
+}
+
+.confidence-bar {
+  width: 100%;
+  height: 10px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 12px 0 8px;
+}
+
+.confidence-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #14b8a6, #0f766e);
+  border-radius: 999px;
+}
+
+.confidence-text {
+  margin: 0 0 10px;
+  font-size: 13px !important;
+  font-weight: 700;
+  color: #334155 !important;
+}
+
+.conclusao-modelos {
+  margin-top: 22px;
+  padding: 18px;
+  border-radius: 16px;
+  background: rgba(15, 118, 110, 0.08);
+  border: 1px solid rgba(15, 118, 110, 0.2);
+}
+
+.conclusao-modelos strong {
+  color: #0f766e;
+}
+
+.conclusao-modelos p {
+  margin-bottom: 0;
+}
+
+@media (max-width: 700px) {
+  .modelos-container {
+    grid-template-columns: 1fr;
+  }
 }

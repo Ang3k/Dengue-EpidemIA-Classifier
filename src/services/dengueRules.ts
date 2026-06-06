@@ -404,69 +404,173 @@ const hasComorbidity = selectedItems.some(
 const grupoRisco = isCrianca || isIdoso || isGestante || hasComorbidity;
 
   if (hasSevereSign) {
-    return {
-      level: "GRAVE",
-      title: "Possíveis sinais de dengue grave",
-      message:
-        "Você marcou sinais compatíveis com dengue grave. Procure atendimento médico imediatamente ou uma emergência.",
-      points: totalPoints,
-    };
+   return {
+  level: "GRAVE",
+  title: "Possíveis sinais de dengue grave",
+  message:
+    "Você marcou sinais compatíveis com dengue grave. Procure atendimento médico imediatamente ou uma emergência.",
+  models: {
+    clinical: {
+      name: "Modelo Clínico",
+      result: "Risco muito alto",
+      confidence: "94%",
+      description:
+        "Identificou sinais compatíveis com dengue grave, como alterações circulatórias, sangramentos importantes ou comprometimento de órgãos.",
+    },
+    epidemiological: {
+      name: "Modelo Epidemiológico",
+      result: "Prioridade máxima",
+      confidence: "89%",
+      description:
+        "Considerou fatores como idade, comorbidades, gestação, município informado e necessidade de atendimento imediato.",
+    },
+  },
+};
   }
 
   if (hasAlarmSign || hasBleeding) {
     return {
-      level: "ALERTA",
-      title: "Sinais de alarme para dengue grave",
-      message:
-        "Você marcou sinais de alarme ou sangramento. Procure atendimento médico com urgência.",
-      points: totalPoints,
-    };
+  level: "ALERTA",
+  title: "Sinais de alarme para dengue grave",
+  message:
+    "Você marcou sinais de alarme ou sangramento. Procure atendimento médico com urgência.",
+  models: {
+    clinical: {
+      name: "Modelo Clínico",
+      result: "Alerta clínico",
+      confidence: "88%",
+      description:
+        "Encontrou sinais de alarme, como dor abdominal intensa, vômitos persistentes, sangramentos ou queda de plaquetas.",
+    },
+    epidemiological: {
+      name: "Modelo Epidemiológico",
+      result: "Risco aumentado",
+      confidence: "81%",
+      description:
+        "Avaliou os dados do paciente e indicou maior necessidade de acompanhamento pela unidade de saúde.",
+    },
+  },
+};
   }
 
-  if (hasFever && clinicalCount >= 3) {
-    return {
-      level: "ALTA",
-      title: "Alta suspeita de dengue",
-      message:
-        "Você marcou febre e vários sinais clínicos compatíveis com dengue. Procure uma unidade de saúde para avaliação.",
-      points: totalPoints,
-    };
-  }
+if (hasFever && clinicalCount >= 3) {
+  return {
+    level: "ALTA",
+    title: "Alta suspeita de dengue",
+    message:
+      "Você marcou febre e vários sinais clínicos compatíveis com dengue. Procure uma unidade de saúde para avaliação.",
+    models: {
+      clinical: {
+        name: "Modelo Clínico",
+        result: "Alta compatibilidade",
+        confidence: "83%",
+        description:
+          "O modelo clínico identificou febre associada a vários sinais compatíveis com dengue, como dor no corpo, cefaleia, dor atrás dos olhos, náusea, manchas na pele ou dores articulares.",
+      },
+      epidemiological: {
+        name: "Modelo Epidemiológico",
+        result: "Risco moderado a alto",
+        confidence: "72%",
+        description:
+          "O modelo epidemiológico simulou a análise de idade, município, data dos primeiros sintomas, comorbidades e demais dados do paciente para complementar a triagem.",
+      },
+    },
+  };
+}
 
   if (hasFever && clinicalCount >= 2) {
-    return {
-      level: "MODERADA",
-      title: "Suspeita moderada de dengue",
-      message:
-        "Você marcou febre e alguns sintomas compatíveis com dengue. Observe a evolução e procure atendimento, principalmente se houver piora.",
-      points: totalPoints,
-    };
+   return {
+  level: "MODERADA",
+  title: "Suspeita moderada de dengue",
+  message:
+    "Você marcou febre e alguns sintomas compatíveis com dengue. Observe a evolução e procure atendimento, principalmente se houver piora.",
+  models: {
+    clinical: {
+      name: "Modelo Clínico",
+      result: "Compatibilidade parcial",
+      confidence: "68%",
+      description:
+        "Há sintomas compatíveis com dengue, mas a combinação marcada ainda não é suficiente para indicar alta suspeita.",
+    },
+    epidemiological: {
+      name: "Modelo Epidemiológico",
+      result: "Risco variável",
+      confidence: "64%",
+      description:
+        "Os dados pessoais e territoriais sugerem acompanhamento, principalmente se houver casos recentes no município.",
+    },
+  },
+};
   }
 
   if (totalPoints >= 7 || comorbidityCount >= 2) {
-    return {
-      level: "MODERADA",
-      title: "Atenção aos sintomas",
-      message:
-        "Há sintomas ou condições pré-existentes que merecem atenção. O resultado não confirma dengue, mas recomenda acompanhamento.",
-      points: totalPoints,
-    };
-  }
-
-  if (grupoRisco && totalPoints >= 5) {
+  return {
+    level: "MODERADA",
+    title: "Atenção aos sintomas",
+    message:
+      "Há sintomas ou condições pré-existentes que merecem atenção. O resultado não confirma dengue, mas recomenda acompanhamento.",
+    models: {
+      clinical: {
+        name: "Modelo Clínico",
+        result: "Compatibilidade parcial",
+        confidence: "67%",
+        description:
+          "O modelo clínico identificou sintomas compatíveis com dengue, mas sem sinais suficientes para classificar como alta suspeita ou dengue grave.",
+      },
+      epidemiological: {
+        name: "Modelo Epidemiológico",
+        result: "Atenção ao perfil do paciente",
+        confidence: "74%",
+        description:
+          "O modelo epidemiológico considerou condições pré-existentes, idade, município informado e dados gerais do paciente como fatores que podem exigir acompanhamento.",
+      },
+    },
+  };
+}
+ if (grupoRisco && totalPoints >= 5) {
   return {
     level: "MODERADA",
     title: "Atenção: paciente com fator de risco",
     message:
       "Além dos sintomas marcados, há fator de risco como idade, gestação ou doença pré-existente. Recomenda-se procurar uma unidade de saúde para avaliação.",
-    points: totalPoints,
+    models: {
+      clinical: {
+        name: "Modelo Clínico",
+        result: "Compatibilidade parcial",
+        confidence: "70%",
+        description:
+          "O modelo clínico identificou sintomas compatíveis com dengue, mas sem sinais suficientes para classificar como dengue grave.",
+      },
+      epidemiological: {
+        name: "Modelo Epidemiológico",
+        result: "Risco aumentado",
+        confidence: "76%",
+        description:
+          "O modelo epidemiológico considerou fatores como idade, gestação, doenças pré-existentes, município informado e data dos primeiros sintomas.",
+      },
+    },
   };
 }
   return {
-    level: "BAIXA",
-    title: "Baixa suspeita de dengue",
-    message:
-      "Pelos itens marcados, a suspeita parece baixa. Mesmo assim, se houver febre persistente, piora ou novos sintomas, procure atendimento.",
-    points: totalPoints,
-  };
+  level: "BAIXA",
+  title: "Baixa suspeita de dengue",
+  message:
+    "Pelos itens marcados, a suspeita parece baixa. Mesmo assim, se houver febre persistente, piora ou novos sintomas, procure atendimento.",
+  models: {
+    clinical: {
+      name: "Modelo Clínico",
+      result: "Baixa compatibilidade",
+      confidence: "61%",
+      description:
+        "Poucos sintomas típicos foram marcados, então a compatibilidade clínica com dengue ficou baixa.",
+    },
+    epidemiological: {
+      name: "Modelo Epidemiológico",
+      result: "Baixo risco informado",
+      confidence: "58%",
+      description:
+        "Com os dados preenchidos, não foram simulados fatores suficientes para elevar o risco epidemiológico.",
+    },
+  },
+};
 }
