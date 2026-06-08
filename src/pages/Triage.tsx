@@ -49,6 +49,7 @@ function Triage() {
   });
 
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
+  const [resultado, setResultado] = useState<ReturnType<typeof avaliarDengue> | null>(null);
 
   function toggleItem(id: string) {
     setSelectedItems((current) => {
@@ -59,8 +60,12 @@ function Triage() {
       return [...current, id];
     });
   }
+  function handleEnviarTriagem() {
+  const resultadoFinal = avaliarDengue(selectedItems, patientData);
+  setResultado(resultadoFinal);
+}
 
-  const resultado = avaliarDengue(selectedItems, patientData);
+  
 
   return (
     <main className="container">
@@ -100,13 +105,20 @@ function Triage() {
             </section>
           );
         })}
+        <div className="actions">
+  <button type="button" className="btn-primary" onClick={handleEnviarTriagem}>
+    Enviar triagem
+  </button>
+</div>
 
-        <Resultado
-          title={resultado.title}
-          message={resultado.message}
-          level={resultado.level}
-          models={resultado.models}
-        />
+       {resultado && (
+  <Resultado
+    title={resultado.title}
+    message={resultado.message}
+    level={resultado.level}
+    models={resultado.models}
+  />
+)}
 
         <div style={{ marginTop: 20 }}>
           <Link to="/" className="secondary">
