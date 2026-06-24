@@ -9,9 +9,7 @@ except ImportError:
 
 FINAL_COLUMN_ORDER = [
     # Paciente
-    "age",
     "age_years",
-    "sex",
     "sex_label",
     "pregnancy_status",
     "pregnancy_status_label",
@@ -146,7 +144,6 @@ class DengueDataCleaner:
 
         df["birth_date"] = pd.to_datetime(df["birth_date"], errors="coerce")
         df["birth_year_derived"] = df["birth_date"].dt.year
-        df["age"] = 2020 - df["birth_year_derived"]
         df = df.drop(["birth_date", "birth_year_derived"], axis=1, errors="ignore")
         df["notification_date"] = pd.to_datetime(df["notification_date"], errors="coerce")
         df["symptom_onset_date"] = pd.to_datetime(df["symptom_onset_date"], errors="coerce")
