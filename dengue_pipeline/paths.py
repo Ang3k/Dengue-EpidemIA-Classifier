@@ -27,3 +27,7 @@ RAW_DENGUE_CSVS = tuple(
 )
 
 ML_DATASET_PATH = PROCESSED_DATA_DIR / "dengue_tratado_ml.parquet"
+
+# Encoders ajustados no treino (OrdinalEncoder de ocupação e UF), usados pela API
+# para reproduzir o mesmo pré-processamento do transformar_ml na hora da predição.
+ML_PREPROCESS_PATH = MODELS_DIR / "ml_preprocess.joblib"
