@@ -1,7 +1,11 @@
 import { useState } from "react";
-import { DENGUE_THRESHOLD } from "../services/dengueRules";
-
-const API_URL = "http://localhost:8000";
+import {
+  DENGUE_THRESHOLD,
+  formatModelName,
+  solicitarPredicao,
+  triageItems,
+} from "../services/dengueRules";
+import type { PredictionPayload } from "../services/dengueRules";
 
 // Valores baseados nos mapeamentos do dengue_pipeline
 const SEXOS = [
@@ -27,46 +31,35 @@ const ESCOLARIDADES = [
 ];
 
 const OCUPACOES = [
-  "Estudante",
-  "Dona de casa",
-  "Trabalhador agropecuário em geral",
-  "Pedreiro",
-  "Motorista de carro de passeio",
-  "Vendedor de comércio varejista",
-  "Professor de nível médio no ensino fundamental",
-  "Técnico de enfermagem",
-  "Auxiliar de escritório, em geral",
-  "Recepcionista, em geral",
-  "Empregado doméstico nos serviços gerais",
-  "Cozinheiro geral",
-  "Vigilante",
-  "Operador de caixa",
+  { label: "Estudante", code: "999991" },
+  { label: "Dona de casa", code: "999992" },
+  { label: "Trabalhador agropecuário em geral", code: "621005" },
+  { label: "Pedreiro", code: "715210" },
+  { label: "Motorista de carro de passeio", code: "782305" },
+  { label: "Vendedor de comércio varejista", code: "521110" },
+  {
+    label: "Professor de nível médio no ensino fundamental",
+    code: "331205",
+  },
+  { label: "Técnico de enfermagem", code: "322205" },
+  { label: "Auxiliar de escritório, em geral", code: "411005" },
+  { label: "Recepcionista, em geral", code: "422105" },
+  {
+    label: "Empregado doméstico nos serviços gerais",
+    code: "512105",
+  },
+  { label: "Cozinheiro geral", code: "513205" },
+  { label: "Vigilante", code: "517330" },
+  { label: "Operador de caixa", code: "421125" },
 ];
 
-// Sintomas com seus ids para a API
-const SINTOMAS = [
-  { label: "Febre", id: "fever" },
-  { label: "Mialgia / dor muscular", id: "myalgia" },
-  { label: "Cefaleia / dor de cabeça", id: "headache" },
-  { label: "Exantema / manchas na pele", id: "rash" },
-  { label: "Vômitos", id: "vomiting" },
-  { label: "Náusea / enjoo", id: "nausea" },
-  { label: "Dor nas costas", id: "back_pain" },
-  { label: "Conjuntivite", id: "conjunctivitis" },
-  { label: "Dor nas articulações", id: "joint_pain" },
-  { label: "Dor atrás dos olhos", id: "retro_orbital_pain" },
-];
-
-const CLASSIFICACOES = [
-  "Descartado",
-  "Dengue",
-  "Dengue com sinais de alarme",
-  "Dengue grave",
-];
+const SINTOMAS = triageItems.map(({ id, label }) => ({ id, label }));
 
 // UFs do Brasil com código IBGE
-const UFS = [11, 12, 13, 14, 15, 16, 17, 21, 22, 23, 24, 25, 26, 27, 28, 29,
-             31, 32, 33, 35, 41, 42, 43, 50, 51, 52, 53];
+const UFS = [
+  11, 12, 13, 14, 15, 16, 17, 21, 22, 23, 24, 25, 26, 27, 28, 29, 31,
+  32, 33, 35, 41, 42, 43, 50, 51, 52, 53,
+];
 
 type SintomaItem = { label: string; id: string };
 
@@ -75,12 +68,11 @@ type Pessoa = {
   sexo: { label: string; code: string };
   raca: { label: string; code: number };
   escolaridade: { label: string; code: number };
-  ocupacao: string;
+  ocupacao: { label: string; code: string };
   sintomas: SintomaItem[];
   residenceState: number;
-  notificationMonth: number;
-  symptomEpiWeekNumber: number;
-  classificacaoReal: string;
+  notificationDate: string;
+  symptomOnsetDate: string;
 };
 
 type Predicao = {
@@ -96,6 +88,17 @@ function escolherAleatorio<T>(lista: T[]): T {
 function gerarPessoa(): Pessoa {
   const sintomasEmbaralhados = [...SINTOMAS].sort(() => Math.random() - 0.5);
   const quantidade = 2 + Math.floor(Math.random() * 4);
+  const inicioSintomas = new Date(
+    Date.UTC(
+      2019,
+      Math.floor(Math.random() * 12),
+      1 + Math.floor(Math.random() * 24)
+    )
+  );
+  const notificacao = new Date(inicioSintomas);
+  notificacao.setUTCDate(
+    notificacao.getUTCDate() + Math.floor(Math.random() * 8)
+  );
 
   return {
     idade: 1 + Math.floor(Math.random() * 89),
@@ -105,9 +108,8 @@ function gerarPessoa(): Pessoa {
     ocupacao: escolherAleatorio(OCUPACOES),
     sintomas: sintomasEmbaralhados.slice(0, quantidade),
     residenceState: escolherAleatorio(UFS),
-    notificationMonth: 1 + Math.floor(Math.random() * 12),
-    symptomEpiWeekNumber: 1 + Math.floor(Math.random() * 52),
-    classificacaoReal: escolherAleatorio(CLASSIFICACOES),
+    notificationDate: notificacao.toISOString().slice(0, 10),
+    symptomOnsetDate: inicioSintomas.toISOString().slice(0, 10),
   };
 }
 
@@ -117,27 +119,19 @@ async function chamarAPI(pessoa: Pessoa): Promise<Predicao> {
     sintomasPayload[s.id] = pessoa.sintomas.some((ps) => ps.id === s.id) ? 1 : 0;
   }
 
-  const payload = {
+  const payload: PredictionPayload = {
     age_years: pessoa.idade,
     sex: pessoa.sexo.code,
     race: pessoa.raca.code,
     education_level: pessoa.escolaridade.code,
-    occupation_code: "1",
+    occupation_code: pessoa.ocupacao.code,
     residence_state: pessoa.residenceState,
-    notification_month: pessoa.notificationMonth,
-    symptom_epi_week_number: pessoa.symptomEpiWeekNumber,
+    notification_date: pessoa.notificationDate,
+    symptom_onset_date: pessoa.symptomOnsetDate,
     ...sintomasPayload,
   };
 
-  const response = await fetch(`${API_URL}/predict`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) throw new Error(`Erro na API: ${response.status}`);
-
-  const data = await response.json();
+  const data = await solicitarPredicao(payload);
   return {
     modelos: data.models,
     media: data.average,
@@ -166,8 +160,12 @@ function PredictionSimulator() {
     try {
       const resultado = await chamarAPI(pessoa);
       setPredicao(resultado);
-    } catch {
-      setErro("Não foi possível conectar à API. Verifique se o servidor está rodando.");
+    } catch (error) {
+      setErro(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível concluir a predição."
+      );
     } finally {
       setCarregando(false);
     }
@@ -207,7 +205,15 @@ function PredictionSimulator() {
             </div>
             <div className="sim-campo sim-campo-largo">
               <span className="sim-label">Ocupação</span>
-              <span className="sim-valor">{pessoa.ocupacao}</span>
+              <span className="sim-valor">{pessoa.ocupacao.label}</span>
+            </div>
+            <div className="sim-campo">
+              <span className="sim-label">Início dos sintomas</span>
+              <span className="sim-valor">{pessoa.symptomOnsetDate}</span>
+            </div>
+            <div className="sim-campo">
+              <span className="sim-label">Notificação</span>
+              <span className="sim-valor">{pessoa.notificationDate}</span>
             </div>
           </div>
 
@@ -220,11 +226,6 @@ function PredictionSimulator() {
                 </span>
               ))}
             </div>
-          </div>
-
-          <div className="sim-classificacao">
-            <span className="sim-label">Classificação real</span>
-            <span className="sim-valor-destaque">{pessoa.classificacaoReal}</span>
           </div>
 
           <button
@@ -248,7 +249,9 @@ function PredictionSimulator() {
                 {predicao.modelos.map((modelo) => (
                   <div key={modelo.name} className="sim-modelo">
                     <div className="sim-modelo-topo">
-                      <span className="sim-modelo-nome">{modelo.name}</span>
+                      <span className="sim-modelo-nome">
+                        {formatModelName(modelo.name)}
+                      </span>
                       <span className="sim-modelo-prob">
                         {modelo.probability}%
                       </span>

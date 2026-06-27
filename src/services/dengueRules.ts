@@ -18,10 +18,25 @@ export type EvaluationResult = {
   isDengue: boolean;
 };
 
+export type PredictionPayload = Record<string, string | number | null>;
+
 // Acima deste valor (em %), o resultado final é considerado dengue
 export const DENGUE_THRESHOLD = 40;
 
-const API_URL = "http://localhost:8000";
+const API_URL = (
+  import.meta.env.VITE_API_URL ?? "http://localhost:8000"
+).replace(/\/+$/, "");
+
+const MODEL_LABELS: Record<string, string> = {
+  logistic_regression: "Regressão logística",
+  xgboost: "XGBoost",
+  lightgbm: "LightGBM",
+  decision_tree: "Árvore de decisão",
+};
+
+export function formatModelName(name: string): string {
+  return MODEL_LABELS[name] ?? name;
+}
 
 export const triageItems: TriageItem[] = [
   {
@@ -104,124 +119,91 @@ export const triageItems: TriageItem[] = [
   },
 ];
 
-// Monta o body que a API espera a partir dos dados do formulário
-function montarPayload(
+function numberOrNull(value: string): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function montarPayload(
   selectedIds: string[],
   patientData: PatientData
-): Record<string, unknown> {
-  // Sintomas: 1 se marcado, 0 se não
-  const sintomas: Record<string, number> = {};
+): PredictionPayload {
+  const sintomas: PredictionPayload = {};
   for (const item of triageItems) {
     sintomas[item.id] = selectedIds.includes(item.id) ? 1 : 0;
   }
 
-  // Extrai mês e ano da data de notificação, se preenchida
-  let notificationMonth: number | null = null;
-  let notificationYear: number | null = null;
-  if (patientData.notificationDate) {
-    const d = new Date(patientData.notificationDate);
-    notificationMonth = d.getMonth() + 1;
-    notificationYear = d.getFullYear();
-  } else {
-    notificationMonth = patientData.notificationMonth
-      ? Number(patientData.notificationMonth)
-      : null;
-    notificationYear = patientData.notificationYear
-      ? Number(patientData.notificationYear)
-      : null;
-  }
-
   return {
-    // Paciente
-    age_years: patientData.ageYears
-      ? Number(patientData.ageYears)
-      : patientData.age
-      ? Number(patientData.age)
-      : null,
+    age_years: numberOrNull(patientData.ageYears),
     sex: patientData.sex || null,
-    pregnancy_status: patientData.pregnancyStatus
-      ? Number(patientData.pregnancyStatus)
-      : null,
-    race: patientData.race ? Number(patientData.race) : null,
-    education_level: patientData.educationLevel
-      ? Number(patientData.educationLevel)
-      : null,
+    pregnancy_status: numberOrNull(patientData.pregnancyStatus),
+    race: numberOrNull(patientData.race),
+    education_level: numberOrNull(patientData.educationLevel),
     occupation_code: patientData.occupationCode || null,
-
-    // Residência
-    residence_state: patientData.residenceState
-      ? Number(patientData.residenceState)
-      : null,
-    residence_municipality: patientData.residenceMunicipality
-      ? Number(patientData.residenceMunicipality)
-      : null,
-    residence_health_region: patientData.residenceHealthRegion
-      ? Number(patientData.residenceHealthRegion)
-      : null,
-
-    // Notificação
+    residence_state: numberOrNull(patientData.residenceState),
+    residence_municipality: numberOrNull(
+      patientData.residenceMunicipality
+    ),
+    residence_health_region: numberOrNull(
+      patientData.residenceHealthRegion
+    ),
     notification_date: patientData.notificationDate || null,
-    notification_year: notificationYear,
-    notification_month: notificationMonth,
-    notification_epi_week: patientData.notificationEpiWeek
-      ? Number(patientData.notificationEpiWeek)
-      : null,
-    notif_municipality: patientData.notifMunicipality
-      ? Number(patientData.notifMunicipality)
-      : null,
-    notif_health_region: patientData.notifHealthRegion
-      ? Number(patientData.notifHealthRegion)
-      : null,
-    health_facility: patientData.healthFacility
-      ? Number(patientData.healthFacility)
-      : null,
-
-    // Início dos sintomas
     symptom_onset_date: patientData.symptomOnsetDate || null,
-    days_to_notification: patientData.daysToNotification
-      ? Number(patientData.daysToNotification)
-      : null,
-    symptom_epi_year: patientData.symptomEpiYear
-      ? Number(patientData.symptomEpiYear)
-      : null,
-    symptom_epi_week_number: patientData.symptomEpiWeekNumber
-      ? Number(patientData.symptomEpiWeekNumber)
-      : null,
-
-    // Hospitalização
-    hospitalized: patientData.hospitalized
-      ? Number(patientData.hospitalized)
-      : null,
-    hospital_state: patientData.hospitalState
-      ? Number(patientData.hospitalState)
-      : null,
-
-    // Sintomas
+    days_to_notification: numberOrNull(patientData.daysToNotification),
+    symptom_epi_week_number: numberOrNull(
+      patientData.symptomEpiWeekNumber
+    ),
     ...sintomas,
   };
 }
 
-export async function avaliarDengue(
+export async function solicitarPredicao(
+  payload: PredictionPayload
+): Promise<EvaluationResult> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/predict`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    throw new Error(
+      "Não foi possível conectar à API. Verifique se o servidor está rodando."
+    );
+  }
+
+  if (!response.ok) {
+    let detail = `A API retornou o status ${response.status}.`;
+    try {
+      const errorBody = await response.json();
+      if (typeof errorBody.detail === "string") {
+        detail = errorBody.detail;
+      }
+    } catch {
+      // A resposta não contém JSON; usa a mensagem baseada no status.
+    }
+    throw new Error(detail);
+  }
+
+  const data: unknown = await response.json();
+  if (
+    !data ||
+    typeof data !== "object" ||
+    !Array.isArray((data as EvaluationResult).models) ||
+    typeof (data as EvaluationResult).average !== "number" ||
+    typeof (data as EvaluationResult).isDengue !== "boolean"
+  ) {
+    throw new Error("A API retornou uma resposta inválida.");
+  }
+
+  return data as EvaluationResult;
+}
+
+export function avaliarDengue(
   selectedIds: string[],
   patientData: PatientData
 ): Promise<EvaluationResult> {
-  const payload = montarPayload(selectedIds, patientData);
-
-  const response = await fetch(`${API_URL}/predict`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Erro na API: ${response.status}`);
-  }
-
-  const data = await response.json();
-
-  return {
-    models: data.models,
-    average: data.average,
-    isDengue: data.isDengue,
-  };
+  return solicitarPredicao(montarPayload(selectedIds, patientData));
 }

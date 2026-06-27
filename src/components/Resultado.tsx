@@ -1,4 +1,7 @@
-import { DENGUE_THRESHOLD } from "../services/dengueRules";
+import {
+  DENGUE_THRESHOLD,
+  formatModelName,
+} from "../services/dengueRules";
 import type { EvaluationResult } from "../services/dengueRules";
 
 function Resultado({ models, average, isDengue }: EvaluationResult) {
@@ -10,7 +13,9 @@ function Resultado({ models, average, isDengue }: EvaluationResult) {
       <div className="modelo-quadrados">
         {models.map((modelo) => (
           <div className="modelo-quadrado" key={modelo.name}>
-            <span className="modelo-quadrado-nome">{modelo.name}</span>
+            <span className="modelo-quadrado-nome">
+              {formatModelName(modelo.name)}
+            </span>
             <span className="modelo-quadrado-prob">{modelo.probability}%</span>
             <span className="modelo-quadrado-legenda">prob. de dengue</span>
           </div>

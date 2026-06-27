@@ -5,48 +5,52 @@ type PatientFormProps = {
   setPatientData: React.Dispatch<React.SetStateAction<PatientData>>;
 };
 
+const UFS = [
+  ["11", "RO"], ["12", "AC"], ["13", "AM"], ["14", "RR"],
+  ["15", "PA"], ["16", "AP"], ["17", "TO"], ["21", "MA"],
+  ["22", "PI"], ["23", "CE"], ["24", "RN"], ["25", "PB"],
+  ["26", "PE"], ["27", "AL"], ["28", "SE"], ["29", "BA"],
+  ["31", "MG"], ["32", "ES"], ["33", "RJ"], ["35", "SP"],
+  ["41", "PR"], ["42", "SC"], ["43", "RS"], ["50", "MS"],
+  ["51", "MT"], ["52", "GO"], ["53", "DF"],
+] as const;
+
 function PatientForm({ patientData, setPatientData }: PatientFormProps) {
   function handleChange(
     event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
   ) {
     const { name, value } = event.target;
-
-    setPatientData((current) => ({
-      ...current,
-      [name]: value,
-    }));
+    setPatientData((current) => ({ ...current, [name]: value }));
   }
 
   return (
     <section className="patient-form">
-      <h2>Dados principais</h2>
+      <h2>Dados usados pelo modelo</h2>
 
       <div className="form-grid">
         <div className="form-group">
-          <label>Idade</label>
+          <label htmlFor="ageYears">Idade (anos)</label>
           <input
-            type="number"
-            name="age"
-            value={patientData.age}
-            onChange={handleChange}
-            placeholder="Ex: 25"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Idade em anos</label>
-          <input
+            id="ageYears"
             type="number"
             name="ageYears"
             value={patientData.ageYears}
             onChange={handleChange}
-            placeholder="Ex: 25"
+            min="0"
+            max="130"
+            step="1"
+            placeholder="Ex.: 25"
           />
         </div>
 
         <div className="form-group">
-          <label>Sexo</label>
-          <select name="sex" value={patientData.sex} onChange={handleChange}>
+          <label htmlFor="sex">Sexo</label>
+          <select
+            id="sex"
+            name="sex"
+            value={patientData.sex}
+            onChange={handleChange}
+          >
             <option value="">Selecione</option>
             <option value="M">Masculino</option>
             <option value="F">Feminino</option>
@@ -55,8 +59,9 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
         </div>
 
         <div className="form-group">
-          <label>Status de gestação</label>
+          <label htmlFor="pregnancyStatus">Status de gestação</label>
           <select
+            id="pregnancyStatus"
             name="pregnancyStatus"
             value={patientData.pregnancyStatus}
             onChange={handleChange}
@@ -73,8 +78,13 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
         </div>
 
         <div className="form-group">
-          <label>Raça/cor</label>
-          <select name="race" value={patientData.race} onChange={handleChange}>
+          <label htmlFor="race">Raça/cor</label>
+          <select
+            id="race"
+            name="race"
+            value={patientData.race}
+            onChange={handleChange}
+          >
             <option value="">Selecione</option>
             <option value="1">Branca</option>
             <option value="2">Preta</option>
@@ -86,8 +96,9 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
         </div>
 
         <div className="form-group">
-          <label>Escolaridade</label>
+          <label htmlFor="educationLevel">Escolaridade</label>
           <select
+            id="educationLevel"
             name="educationLevel"
             value={patientData.educationLevel}
             onChange={handleChange}
@@ -108,75 +119,74 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
         </div>
 
         <div className="form-group">
-          <label>Código da ocupação</label>
+          <label htmlFor="occupationCode">Código CBO da ocupação</label>
           <input
+            id="occupationCode"
             type="text"
+            inputMode="numeric"
             name="occupationCode"
             value={patientData.occupationCode}
             onChange={handleChange}
-            placeholder="Ex: 225125"
+            pattern="[0-9]{5,6}"
+            maxLength={6}
+            placeholder="Ex.: 225125"
           />
         </div>
 
         <div className="form-group">
-          <label>Nome da ocupação</label>
-          <input
-            type="text"
-            name="occupationName"
-            value={patientData.occupationName}
-            onChange={handleChange}
-            placeholder="Ex: Médico clínico"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>UF de residência</label>
-          <input
-            type="text"
+          <label htmlFor="residenceState">UF de residência</label>
+          <select
+            id="residenceState"
             name="residenceState"
             value={patientData.residenceState}
             onChange={handleChange}
-            placeholder="Ex: RJ"
-            maxLength={2}
-          />
+          >
+            <option value="">Selecione</option>
+            {UFS.map(([code, label]) => (
+              <option key={code} value={code}>
+                {label}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="form-group">
-          <label>Município de residência</label>
+          <label htmlFor="residenceMunicipality">
+            Código IBGE do município
+          </label>
           <input
+            id="residenceMunicipality"
             type="text"
+            inputMode="numeric"
             name="residenceMunicipality"
             value={patientData.residenceMunicipality}
             onChange={handleChange}
-            placeholder="Ex: Rio de Janeiro"
+            pattern="[0-9]{7}"
+            maxLength={7}
+            placeholder="Ex.: 3304557"
           />
         </div>
 
         <div className="form-group">
-          <label>Região de saúde da residência</label>
+          <label htmlFor="residenceHealthRegion">
+            Código da região de saúde
+          </label>
           <input
+            id="residenceHealthRegion"
             type="text"
+            inputMode="numeric"
             name="residenceHealthRegion"
             value={patientData.residenceHealthRegion}
             onChange={handleChange}
-            placeholder="Ex: Metropolitana I"
+            pattern="[0-9]+"
+            placeholder="Código numérico"
           />
         </div>
 
         <div className="form-group">
-          <label>Código da doença</label>
+          <label htmlFor="notificationDate">Data da notificação</label>
           <input
-            type="text"
-            name="diseaseCode"
-            value={patientData.diseaseCode}
-            onChange={handleChange}
-            placeholder="Ex: A90"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Data da notificação</label>
-          <input
+            id="notificationDate"
             type="date"
             name="notificationDate"
             value={patientData.notificationDate}
@@ -185,52 +195,11 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
         </div>
 
         <div className="form-group">
-          <label>Semana epidemiológica da notificação</label>
+          <label htmlFor="symptomOnsetDate">
+            Data dos primeiros sintomas
+          </label>
           <input
-            type="text"
-            name="notificationEpiWeek"
-            value={patientData.notificationEpiWeek}
-            onChange={handleChange}
-            placeholder="Ex: 202412"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Município de notificação</label>
-          <input
-            type="text"
-            name="notifMunicipality"
-            value={patientData.notifMunicipality}
-            onChange={handleChange}
-            placeholder="Ex: Rio de Janeiro"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Região de saúde da notificação</label>
-          <input
-            type="text"
-            name="notifHealthRegion"
-            value={patientData.notifHealthRegion}
-            onChange={handleChange}
-            placeholder="Ex: Metropolitana I"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Unidade de saúde</label>
-          <input
-            type="text"
-            name="healthFacility"
-            value={patientData.healthFacility}
-            onChange={handleChange}
-            placeholder="Ex: UBS Central"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Data dos primeiros sintomas</label>
-          <input
+            id="symptomOnsetDate"
             type="date"
             name="symptomOnsetDate"
             value={patientData.symptomOnsetDate}
@@ -239,61 +208,34 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
         </div>
 
         <div className="form-group">
-          <label>Dias até a notificação</label>
+          <label htmlFor="daysToNotification">
+            Dias até a notificação
+          </label>
           <input
+            id="daysToNotification"
             type="number"
             name="daysToNotification"
             value={patientData.daysToNotification}
             onChange={handleChange}
-            placeholder="Ex: 3"
+            min="0"
+            max="90"
+            placeholder="Calculado pelas datas se ficar vazio"
           />
         </div>
 
         <div className="form-group">
-          <label>Ano epidemiológico dos sintomas</label>
+          <label htmlFor="symptomEpiWeekNumber">
+            Semana epidemiológica dos sintomas
+          </label>
           <input
-            type="text"
-            name="symptomEpiYear"
-            value={patientData.symptomEpiYear}
-            onChange={handleChange}
-            placeholder="Ex: 2024"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Semana epidemiológica dos sintomas</label>
-          <input
-            type="text"
+            id="symptomEpiWeekNumber"
+            type="number"
             name="symptomEpiWeekNumber"
             value={patientData.symptomEpiWeekNumber}
             onChange={handleChange}
-            placeholder="Ex: 12"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Hospitalizado?</label>
-          <select
-            name="hospitalized"
-            value={patientData.hospitalized}
-            onChange={handleChange}
-          >
-            <option value="">Selecione</option>
-            <option value="1">Sim</option>
-            <option value="2">Não</option>
-            <option value="9">Ignorado</option>
-          </select>
-        </div>
-
-        <div className="form-group">
-          <label>UF do hospital</label>
-          <input
-            type="text"
-            name="hospitalState"
-            value={patientData.hospitalState}
-            onChange={handleChange}
-            placeholder="Ex: RJ"
-            maxLength={2}
+            min="1"
+            max="53"
+            placeholder="Ex.: 12"
           />
         </div>
       </div>

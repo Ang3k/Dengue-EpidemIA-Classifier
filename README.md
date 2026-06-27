@@ -140,7 +140,8 @@ Os modelos treinados ficam em `artifacts/models/` e os gráficos de importância
 Instalar as dependências:
 
 ```powershell
-py -3.11 -m pip install -r requirements.txt
+py -3.11 -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
 ```
 
 Gerar a base de ML:
@@ -167,14 +168,24 @@ Feito com React, TypeScript e Vite.
 Rotas:
 
 ```text
-/          página inicial (descrição e simulação de demonstração)
+/          página inicial (descrição e simulação com os modelos)
 /triagem   formulário de triagem
 /graphics  Panorama Epidemiológico (gráficos da análise)
 ```
 
-Vale avisar que a triagem e a simulação da página inicial ainda são
-demonstrações: elas usam regras simples (`src/services/dengueRules.ts`) e valores
-de exemplo, e ainda não estão ligadas ao modelo treinado.
+A triagem e a simulação chamam a API FastAPI em `api.py`, que usa os modelos
+treinados de `artifacts/models/`. O arquivo `ml_preprocess.joblib`, gerado pela
+primeira célula do notebook de modelagem, é obrigatório para aplicar os mesmos
+encoders usados no treino.
+
+### Como iniciar a API
+
+```powershell
+.\.venv\Scripts\python -m uvicorn api:app --reload
+```
+
+A API fica em `http://localhost:8000`. O endpoint `/health` informa quais
+modelos e artefatos de pré-processamento foram carregados.
 
 ### Como abrir o site
 
@@ -184,12 +195,11 @@ npm run dev
 ```
 
 O endereço costuma ser `http://localhost:5173`. Para gerar o build é
-`npm run build`.
+`npm run build`. Para usar outra URL de API, defina `VITE_API_URL` no ambiente
+antes de iniciar o Vite.
 
 ## Próximos passos
 
-- Ligar a triagem do site ao modelo treinado, no lugar das regras de
-  demonstração.
 - Tratar a geografia de alta cardinalidade com algum encoding por frequência ou
   região (ajustado só no treino) em vez de simplesmente descartar.
 - Usar a validação cross-year como métrica principal de generalização.

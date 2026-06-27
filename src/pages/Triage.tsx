@@ -11,53 +11,27 @@ const grupos = [
     id: "symptoms",
     title: "Sintomas informados",
   },
+  {
+    id: "clinical",
+    title: "Sinais clínicos",
+  },
 ];
 
 function Triage() {
   const [patientData, setPatientData] = useState<PatientData>({
-    age: "",
     ageYears: "",
-
     sex: "",
-    sexLabel: "",
-
     pregnancyStatus: "",
-    pregnancyStatusLabel: "",
-
     race: "",
-    raceLabel: "",
-
     educationLevel: "",
-    educationLevelLabel: "",
-
     occupationCode: "",
-    occupationName: "",
-
     residenceState: "",
-    residenceStateLabel: "",
     residenceMunicipality: "",
     residenceHealthRegion: "",
-
-    diseaseCode: "",
-
     notificationDate: "",
-    notificationYear: "",
-    notificationMonth: "",
-    notificationDay: "",
-    notificationEpiWeek: "",
-
-    notifMunicipality: "",
-    notifHealthRegion: "",
-    healthFacility: "",
-
     symptomOnsetDate: "",
     daysToNotification: "",
-    symptomEpiYear: "",
     symptomEpiWeekNumber: "",
-
-    hospitalized: "",
-    hospitalState: "",
-    hospitalStateLabel: "",
   });
 
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
@@ -82,9 +56,11 @@ function Triage() {
     try {
       const resultadoFinal = await avaliarDengue(selectedItems, patientData);
       setResultado(resultadoFinal);
-    } catch (e) {
+    } catch (error) {
       setErro(
-        "Não foi possível conectar à API. Verifique se o servidor está rodando."
+        error instanceof Error
+          ? error.message
+          : "Não foi possível concluir a triagem."
       );
     } finally {
       setCarregando(false);
