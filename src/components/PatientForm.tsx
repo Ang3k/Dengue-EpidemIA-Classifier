@@ -396,35 +396,7 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
         </div>
 
         {/* Região de saúde — preenchida automaticamente ou select se houver mais de uma */}
-        <div className="form-group">
-          <label htmlFor="residenceHealthRegion">Região de saúde</label>
-          {regioesResidencia.length > 1 ? (
-            <select
-              id="residenceHealthRegion"
-              value={patientData.residenceHealthRegion}
-              onChange={e => set("residenceHealthRegion", e.target.value)}
-            >
-              <option value="">Selecione</option>
-              {regioesResidencia.map(r => (
-                <option key={r.code} value={r.code}>{r.name}</option>
-              ))}
-            </select>
-          ) : (
-            <input
-              id="residenceHealthRegion"
-              type="text"
-              readOnly
-              className="form-readonly"
-              value={
-                regioesResidencia[0]?.name ??
-                (patientData.residenceHealthRegion
-                  ? `Cód. ${patientData.residenceHealthRegion}`
-                  : "")
-              }
-              placeholder="Preenchido ao selecionar o município"
-            />
-          )}
-        </div>
+       
 
         {/* Data dos primeiros sintomas */}
         <div className="form-group">
@@ -445,38 +417,6 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
             type="date"
             value={patientData.notificationDate}
             onChange={e => set("notificationDate", e.target.value)}
-          />
-        </div>
-
-        {/* Semana epi — calculada automaticamente */}
-        <div className="form-group">
-          <label>Semana epidemiológica dos sintomas</label>
-          <input
-            type="text"
-            readOnly
-            className="form-readonly"
-            value={
-              patientData.symptomEpiWeekNumber
-                ? `Semana ${patientData.symptomEpiWeekNumber} / ${patientData.symptomEpiYear}`
-                : ""
-            }
-            placeholder="Calculada automaticamente"
-          />
-        </div>
-
-        {/* Dias até notificação — calculado automaticamente */}
-        <div className="form-group">
-          <label>Dias até a notificação</label>
-          <input
-            type="text"
-            readOnly
-            className="form-readonly"
-            value={
-              patientData.daysToNotification
-                ? `${patientData.daysToNotification} dias`
-                : ""
-            }
-            placeholder="Calculado automaticamente"
           />
         </div>
 

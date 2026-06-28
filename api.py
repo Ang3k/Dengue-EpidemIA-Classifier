@@ -772,7 +772,7 @@ def _carregar_municipios_ref() -> list[dict]:
     raw = json.loads(caminho.read_text(encoding="utf-8"))
     resultado = []
     for m in raw:
-        uf = m.get("microrregiao", {}).get("mesorregiao", {}).get("UF", {})
+        uf = ((m.get("microrregiao") or {}).get("mesorregiao") or {}).get("UF") or {}
         nome = m.get("nome", "")
         resultado.append({
             "code": m["id"],
