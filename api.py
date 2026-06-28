@@ -27,12 +27,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from dengue_pipeline.paths import SIMULATION_SOURCE_PARQUET
 from dengue_pipeline.sinan_mappings import (
     DENGUE_CLASSIFICATION_LABELS,
+    EDUCATION_LABELS,
+    PREGNANCY_LABELS,
     SEX_LABELS,
     RACE_LABELS,
     UF_ABBR_LABELS,
+    UF_LABELS,
     add_sinan_cbo_labels,
     standardize_columns,
 )
+from dengue_pipeline.cbo_map import CBO_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -741,3 +745,171 @@ def simulation_random(payload: SimulacaoRandomRequest | None = None):
             "isDengue": prediction["isDengue"],
         },
     }
+
+# ===========================================================================
+# NOVOS ENDPOINTS — Pessoa 2
+# ===========================================================================
+
+import unicodedata as _unicodedata
+from fastapi import Query as _Query
+
+# ---------------------------------------------------------------------------
+# Dados de referência — municípios
+# ---------------------------------------------------------------------------
+
+def _norm(texto: str) -> str:
+    return (
+        _unicodedata.normalize("NFKD", texto.lower())
+        .encode("ascii", "ignore")
+        .decode()
+    )
+
+def _carregar_municipios_ref() -> list[dict]:
+    import json
+    caminho = Path(__file__).parent / "data" / "municipios.json"
+    if not caminho.exists():
+        return []
+    raw = json.loads(caminho.read_text(encoding="utf-8"))
+    resultado = []
+    for m in raw:
+        uf = m.get("microrregiao", {}).get("mesorregiao", {}).get("UF", {})
+        nome = m.get("nome", "")
+        resultado.append({
+            "code": m["id"],
+            "name": nome,
+            "stateCode": uf.get("id", 0),
+            "state": uf.get("sigla", ""),
+            "name_norm": _norm(nome),
+        })
+    return resultado
+
+_MUNICIPIOS_REF = _carregar_municipios_ref()
+
+# Regiões de saúde por município (carrega data/regioes_saude.json se existir)
+def _carregar_regioes_ref() -> dict[int, list[dict]]:
+    import json
+    caminho = Path(__file__).parent / "data" / "regioes_saude.json"
+    if not caminho.exists():
+        return {}
+    raw = json.loads(caminho.read_text(encoding="utf-8"))
+    return {int(k): v for k, v in raw.items()}
+
+_REGIOES_REF = _carregar_regioes_ref()
+
+# Ocupações para busca
+_OCUPACOES_REF = [
+    {
+        "code": str(v),
+        "name": k.title(),
+        "name_norm": _norm(k),
+    }
+    for k, v in CBO_MAP.items()
+]
+
+DENGUE_THRESHOLD = 40
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/triage/options
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/triage/options")
+def triage_options():
+    """Retorna todas as listas de opções necessárias para o formulário de triagem."""
+    ufs = [
+        {"code": code, "sigla": sigla, "name": UF_LABELS[code]}
+        for code, sigla in UF_ABBR_LABELS.items()
+    ]
+    return {
+        "sexos": [
+            {"code": k, "name": v} for k, v in SEX_LABELS.items()
+        ],
+        "racas": [
+            {"code": k, "name": v} for k, v in RACE_LABELS.items()
+        ],
+        "escolaridades": [
+            {"code": k, "name": v} for k, v in EDUCATION_LABELS.items()
+        ],
+        "situacoesGestacao": [
+            {"code": k, "name": v} for k, v in PREGNANCY_LABELS.items()
+        ],
+        "sintomas": [
+            {"id": "fever",              "label": "Febre"},
+            {"id": "myalgia",            "label": "Mialgia / dor muscular"},
+            {"id": "headache",           "label": "Cefaleia / dor de cabeça"},
+            {"id": "rash",               "label": "Exantema / manchas na pele"},
+            {"id": "vomiting",           "label": "Vômitos"},
+            {"id": "nausea",             "label": "Náusea / enjoo"},
+            {"id": "back_pain",          "label": "Dor nas costas"},
+            {"id": "conjunctivitis",     "label": "Conjuntivite"},
+            {"id": "arthritis",          "label": "Artrite"},
+            {"id": "joint_pain",         "label": "Dor nas articulações"},
+            {"id": "petechiae",          "label": "Petéquias / pontos vermelhos na pele"},
+            {"id": "retro_orbital_pain", "label": "Dor atrás dos olhos"},
+            {"id": "tourniquet_test",    "label": "Prova do laço positiva"},
+        ],
+        "ufs": ufs,
+        "modelosAtivos": list(modelos.keys()),
+        "liamiarClassificacao": DENGUE_THRESHOLD,
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/references/occupations
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/references/occupations")
+def buscar_ocupacoes(
+    query: str = _Query(..., min_length=2),
+    limit: int = _Query(10, ge=1, le=50),
+):
+    """Busca ocupações CBO por nome. Prioriza matches que começam com o texto."""
+    q = _norm(query)
+    starts   = [o for o in _OCUPACOES_REF if o["name_norm"].startswith(q)]
+    contains = [o for o in _OCUPACOES_REF if not o["name_norm"].startswith(q) and q in o["name_norm"]]
+    resultado = (starts + contains)[:limit]
+    return {"items": [{"code": o["code"], "name": o["name"]} for o in resultado]}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/references/municipalities
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/references/municipalities")
+def buscar_municipios(
+    query: str = _Query(..., min_length=2),
+    state: int | None = _Query(None),
+    limit: int = _Query(20, ge=1, le=100),
+):
+    """Busca municípios por nome, com filtro opcional por código IBGE da UF."""
+    if not _MUNICIPIOS_REF:
+        raise HTTPException(
+            status_code=503,
+            detail="Base de municípios não encontrada. Adicione data/municipios.json.",
+        )
+    q = _norm(query)
+    pool = [m for m in _MUNICIPIOS_REF if state is None or m["stateCode"] == state]
+    starts   = [m for m in pool if m["name_norm"].startswith(q)]
+    contains = [m for m in pool if not m["name_norm"].startswith(q) and q in m["name_norm"]]
+    resultado = (starts + contains)[:limit]
+    return {
+        "items": [
+            {
+                "code": m["code"],
+                "name": m["name"],
+                "stateCode": m["stateCode"],
+                "state": m["state"],
+            }
+            for m in resultado
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/references/health-regions
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/references/health-regions")
+def buscar_regioes_saude(municipality: int = _Query(...)):
+    """Retorna as regiões de saúde associadas a um município (código IBGE)."""
+    regioes = _REGIOES_REF.get(municipality, [])
+    return {"items": regioes}

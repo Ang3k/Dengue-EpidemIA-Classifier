@@ -7,52 +7,46 @@ import type { EvaluationResult } from "../services/dengueRules";
 import type { PatientData } from "../types/patient";
 
 const grupos = [
-  {
-    id: "symptoms",
-    title: "Sintomas informados",
-  },
-  {
-    id: "clinical",
-    title: "Sinais clínicos",
-  },
+  { id: "symptoms", title: "Sintomas informados" },
+  { id: "clinical",  title: "Sinais clínicos" },
 ];
 
-function Triage() {
-  const [patientData, setPatientData] = useState<PatientData>({
-    ageYears: "",
-    sex: "",
-    pregnancyStatus: "",
-    race: "",
-    educationLevel: "",
-    occupationCode: "",
-    residenceState: "",
-    residenceMunicipality: "",
-    residenceHealthRegion: "",
-    notificationDate: "",
-    symptomOnsetDate: "",
-    daysToNotification: "",
-    symptomEpiWeekNumber: "",
-  });
+const estadoInicial: PatientData = {
+  ageYears: "",
+  sex: "",
+  pregnancyStatus: "",
+  race: "",
+  educationLevel: "",
+  occupationCode: "",
+  occupationName: "",
+  residenceState: "",
+  residenceStateLabel: "",
+  residenceMunicipality: "",
+  residenceHealthRegion: "",
+  notificationDate: "",
+  symptomOnsetDate: "",
+  daysToNotification: "",
+  symptomEpiWeekNumber: "",
+  symptomEpiYear: "",
+};
 
+function Triage() {
+  const [patientData, setPatientData] = useState<PatientData>(estadoInicial);
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [resultado, setResultado] = useState<EvaluationResult | null>(null);
   const [carregando, setCarregando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
   function toggleItem(id: string) {
-    setSelectedItems((current) => {
-      if (current.includes(id)) {
-        return current.filter((item) => item !== id);
-      }
-      return [...current, id];
-    });
+    setSelectedItems(current =>
+      current.includes(id) ? current.filter(i => i !== id) : [...current, id]
+    );
   }
 
   async function handleEnviarTriagem() {
     setCarregando(true);
     setErro(null);
     setResultado(null);
-
     try {
       const resultadoFinal = await avaliarDengue(selectedItems, patientData);
       setResultado(resultadoFinal);
@@ -71,29 +65,21 @@ function Triage() {
     <main className="container">
       <section className="card">
         <h1>Triagem de Dengue</h1>
-
         <p>
           Preencha os dados principais do paciente e marque os sinais, sintomas
           e condições abaixo. O sistema fará uma triagem baseada nos principais
           campos usados na ficha de dengue do Sinan.
         </p>
 
-        <PatientForm
-          patientData={patientData}
-          setPatientData={setPatientData}
-        />
+        <PatientForm patientData={patientData} setPatientData={setPatientData} />
 
-        {grupos.map((grupo) => {
-          const itensDoGrupo = triageItems.filter(
-            (item) => item.group === grupo.id
-          );
-
+        {grupos.map(grupo => {
+          const itensDoGrupo = triageItems.filter(item => item.group === grupo.id);
           return (
             <section className="grupo-sintomas" key={grupo.id}>
               <h2>{grupo.title}</h2>
-
               <div className="checkbox-list">
-                {itensDoGrupo.map((item) => (
+                {itensDoGrupo.map(item => (
                   <CheckboxItem
                     key={item.id}
                     label={item.label}
@@ -117,9 +103,7 @@ function Triage() {
           </button>
         </div>
 
-        {erro && (
-          <p style={{ color: "red", marginTop: "1rem" }}>{erro}</p>
-        )}
+        {erro && <p style={{ color: "red", marginTop: "1rem" }}>{erro}</p>}
 
         {resultado && (
           <Resultado
