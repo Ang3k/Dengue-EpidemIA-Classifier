@@ -15,6 +15,7 @@ from itertools import combinations
 import logging
 import os
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal
 
 import joblib
@@ -22,10 +23,18 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
-from dengue_pipeline.paths import SIMULATION_SOURCE_PARQUET
+from dengue_pipeline.paths import SIMULATION_POOL_PATH, SIMULATION_SOURCE_PARQUET
 from dengue_pipeline.sinan_mappings import (
+    COLUMN_RENAME_MAP,
     DENGUE_CLASSIFICATION_LABELS,
     EDUCATION_LABELS,
     PREGNANCY_LABELS,
@@ -234,6 +243,52 @@ RACE_CODES = [1, 2, 3, 4, 5, 9]
 
 SIMULATION_YEAR = 2019
 SIMULATION_NOTIFICATION_MONTH_MIN = 6
+SIMULATION_VALID_CLASSIFICATIONS = frozenset(DENGUE_CLASSIFICATION_LABELS)
+MAX_SAMPLE_ATTEMPTS = 10
+
+SIMULATION_SOURCE_COLUMNS = (
+    "notification_date",
+    "notification_year",
+    "notification_epi_week",
+    "symptom_onset_date",
+    "symptom_epi_week",
+    "age",
+    "sex",
+    "pregnancy_status",
+    "race",
+    "education_level",
+    "occupation_code",
+    "residence_state",
+    "residence_municipality",
+    "residence_health_region",
+    "notif_municipality",
+    "notif_health_region",
+    "health_facility",
+    "fever",
+    "myalgia",
+    "headache",
+    "rash",
+    "vomiting",
+    "nausea",
+    "back_pain",
+    "conjunctivitis",
+    "arthritis",
+    "joint_pain",
+    "petechiae",
+    "retro_orbital_pain",
+    "tourniquet_test",
+    "hospitalized",
+    "hospital_state",
+    "final_classification",
+)
+SIMULATION_DERIVED_COLUMNS = (
+    "occupation_name",
+    "final_classification_label",
+)
+SIMULATION_POOL_COLUMNS = (
+    *SIMULATION_SOURCE_COLUMNS,
+    *SIMULATION_DERIVED_COLUMNS,
+)
 
 SIMULATION_SYMPTOM_LABELS = {
     "fever": "Febre",
@@ -251,6 +306,7 @@ SIMULATION_SYMPTOM_LABELS = {
 }
 
 _simulation_pool: pd.DataFrame | None = None
+_simulation_pool_lock = Lock()
 
 
 def _encodar_ordinal(encoder, valor, coluna, como_int64: bool):
@@ -639,58 +695,183 @@ def _anonymized_case_from_sample(row: pd.Series, patient: DadosPaciente) -> dict
     }
 
 
-def _load_simulation_pool() -> pd.DataFrame:
-    global _simulation_pool
-    if _simulation_pool is not None:
-        return _simulation_pool
+def _simulation_pool_is_valid(pool: pd.DataFrame) -> bool:
+    if pool.empty or not set(SIMULATION_POOL_COLUMNS).issubset(pool.columns):
+        return False
 
+    dates = pd.to_datetime(pool["notification_date"], errors="coerce")
+    years = pd.to_numeric(pool["notification_year"], errors="coerce")
+    classifications = pd.to_numeric(
+        pool["final_classification"],
+        errors="coerce",
+    )
+
+    return bool(
+        dates.notna().all()
+        and (years == SIMULATION_YEAR).all()
+        and (dates.dt.month >= SIMULATION_NOTIFICATION_MONTH_MIN).all()
+        and classifications.isin(SIMULATION_VALID_CLASSIFICATIONS).all()
+        and pool["final_classification_label"].notna().all()
+    )
+
+
+def _build_simulation_pool() -> pd.DataFrame:
     if not SIMULATION_SOURCE_PARQUET.exists():
         raise HTTPException(
             status_code=503,
             detail=f"Base da simulacao nao encontrada: {SIMULATION_SOURCE_PARQUET}",
         )
 
-    raw_df = pd.read_parquet(SIMULATION_SOURCE_PARQUET)
-    df = standardize_columns(raw_df)
-    df = add_sinan_cbo_labels(df)
-
-    notification_dates = pd.to_datetime(df.get("notification_date"), errors="coerce")
-    years = pd.to_numeric(df.get("notification_year"), errors="coerce")
-    months = notification_dates.dt.month
-
-    filtered = df[
-        (years == SIMULATION_YEAR)
-        & (months >= SIMULATION_NOTIFICATION_MONTH_MIN)
-    ].copy()
-
-    if filtered.empty:
+    reverse_columns = {
+        standardized: raw
+        for raw, standardized in COLUMN_RENAME_MAP.items()
+    }
+    missing_mappings = [
+        column
+        for column in SIMULATION_SOURCE_COLUMNS
+        if column not in reverse_columns
+    ]
+    if missing_mappings:
         raise HTTPException(
             status_code=503,
-            detail="Nenhum caso elegivel para simulacao na base historica",
+            detail={
+                "message": "Colunas da simulacao sem mapeamento SINAN",
+                "missing": missing_mappings,
+            },
         )
 
-    _simulation_pool = filtered.reset_index(drop=True)
-    return _simulation_pool
+    raw_columns = [
+        reverse_columns[column]
+        for column in SIMULATION_SOURCE_COLUMNS
+    ]
+
+    try:
+        raw_df = pd.read_parquet(
+            SIMULATION_SOURCE_PARQUET,
+            columns=raw_columns,
+        )
+        df = standardize_columns(raw_df)
+
+        dates = pd.to_datetime(df["notification_date"], errors="coerce")
+        years = pd.to_numeric(df["notification_year"], errors="coerce")
+        classifications = pd.to_numeric(
+            df["final_classification"],
+            errors="coerce",
+        )
+        eligible = (
+            (years == SIMULATION_YEAR)
+            & (dates.dt.month >= SIMULATION_NOTIFICATION_MONTH_MIN)
+            & classifications.isin(SIMULATION_VALID_CLASSIFICATIONS)
+        )
+
+        filtered = df.loc[eligible].copy()
+        filtered["notification_year"] = years.loc[eligible].astype("int16")
+        filtered["final_classification"] = classifications.loc[
+            eligible
+        ].astype("int8")
+        filtered = add_sinan_cbo_labels(filtered)
+        filtered = filtered.loc[:, list(SIMULATION_POOL_COLUMNS)].reset_index(
+            drop=True
+        )
+
+        if not _simulation_pool_is_valid(filtered):
+            raise ValueError("pool reduzido da simulacao ficou invalido")
+
+        SIMULATION_POOL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        filtered.to_parquet(SIMULATION_POOL_PATH, index=False)
+        logger.info(
+            "Pool da simulacao gerado em %s com %s registros",
+            SIMULATION_POOL_PATH,
+            len(filtered),
+        )
+        return filtered
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Nao foi possivel gerar o pool da simulacao")
+        raise HTTPException(
+            status_code=503,
+            detail="Nao foi possivel preparar a base historica da simulacao",
+        ) from exc
+
+
+def _load_simulation_pool() -> pd.DataFrame:
+    global _simulation_pool
+    if _simulation_pool is not None:
+        return _simulation_pool
+
+    with _simulation_pool_lock:
+        if _simulation_pool is not None:
+            return _simulation_pool
+
+        pool = None
+        source_is_newer = (
+            SIMULATION_POOL_PATH.exists()
+            and SIMULATION_SOURCE_PARQUET.exists()
+            and SIMULATION_SOURCE_PARQUET.stat().st_mtime
+            > SIMULATION_POOL_PATH.stat().st_mtime
+        )
+
+        if SIMULATION_POOL_PATH.exists() and not source_is_newer:
+            try:
+                candidate = pd.read_parquet(
+                    SIMULATION_POOL_PATH,
+                    columns=list(SIMULATION_POOL_COLUMNS),
+                )
+                if _simulation_pool_is_valid(candidate):
+                    pool = candidate
+                else:
+                    logger.warning(
+                        "Pool da simulacao existente e invalido; regenerando"
+                    )
+            except Exception:
+                logger.exception(
+                    "Nao foi possivel carregar %s; regenerando",
+                    SIMULATION_POOL_PATH,
+                )
+
+        if pool is None:
+            pool = _build_simulation_pool()
+
+        _simulation_pool = pool.reset_index(drop=True)
+        return _simulation_pool
 
 
 def escolher_caso_real_simulacao(seed: int | None = None) -> dict[str, Any]:
     pool = _load_simulation_pool()
-
     rng = np.random.default_rng(seed)
-    sampled_idx = int(rng.integers(0, len(pool)))
-    row = pool.iloc[sampled_idx]
 
-    patient = _build_patient_from_sample(row)
-    observed = row.get("final_classification_label")
-    if observed is None or pd.isna(observed):
-        observed = DENGUE_CLASSIFICATION_LABELS.get(_to_int(row.get("final_classification")))
+    for _ in range(MAX_SAMPLE_ATTEMPTS):
+        sampled_idx = int(rng.integers(0, len(pool)))
+        row = pool.iloc[sampled_idx]
 
-    return {
-        "sampled_index": sampled_idx,
-        "patient": patient,
-        "case": _anonymized_case_from_sample(row, patient),
-        "observed_classification": observed,
-    }
+        try:
+            classification = _to_int(row.get("final_classification"))
+            observed = DENGUE_CLASSIFICATION_LABELS.get(classification)
+            if observed is None:
+                raise ValueError("classificacao observada invalida")
+
+            patient = _build_patient_from_sample(row)
+            anonymized_case = _anonymized_case_from_sample(row, patient)
+        except (ValidationError, ValueError, TypeError, OverflowError) as exc:
+            logger.warning(
+                "Caso historico rejeitado no indice %s: %s",
+                sampled_idx,
+                exc,
+            )
+            continue
+
+        return {
+            "sampled_index": sampled_idx,
+            "patient": patient,
+            "case": anonymized_case,
+            "observed_classification": observed,
+        }
+
+    raise HTTPException(
+        status_code=503,
+        detail="Nao foi possivel selecionar um caso historico valido",
+    )
 
 
 # ---------------------------------------------------------------------------

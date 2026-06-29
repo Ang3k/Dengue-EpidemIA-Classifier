@@ -79,7 +79,7 @@ class ApiTestCase(unittest.TestCase):
                 symptom_onset_date="2019-03-02",
             )
 
-    def test_simulation_pool_filters_second_semester_2019(self):
+    def test_simulation_pool_contains_only_test_cases_and_valid_classes(self):
         try:
             pool = api._load_simulation_pool()
         except Exception as exc:
@@ -87,10 +87,24 @@ class ApiTestCase(unittest.TestCase):
 
         years = pd.to_numeric(pool["notification_year"], errors="coerce")
         months = pd.to_datetime(pool["notification_date"], errors="coerce").dt.month
+        classifications = pd.to_numeric(
+            pool["final_classification"],
+            errors="coerce",
+        )
 
         self.assertFalse(pool.empty)
         self.assertTrue((years == 2019).all())
-        self.assertTrue((months >= 6).all())
+        self.assertTrue(
+            (months >= api.SIMULATION_NOTIFICATION_MONTH_MIN).all()
+        )
+        self.assertTrue(
+            classifications.isin(
+                api.SIMULATION_VALID_CLASSIFICATIONS
+            ).all()
+        )
+        self.assertTrue(pool["final_classification_label"].notna().all())
+        self.assertEqual(set(pool.columns), set(api.SIMULATION_POOL_COLUMNS))
+        self.assertEqual(len(pool), 528_608)
 
     def test_simulation_sampler_is_reproducible_with_seed(self):
         try:
@@ -105,6 +119,31 @@ class ApiTestCase(unittest.TestCase):
             sample_a["observed_classification"],
             sample_b["observed_classification"],
         )
+        self.assertIsNotNone(sample_a["observed_classification"])
+
+    def test_simulation_sampler_skips_invalid_historical_row(self):
+        try:
+            pool = api._load_simulation_pool()
+            valid_sample = api.escolher_caso_real_simulacao(seed=42)
+        except Exception as exc:
+            self.skipTest(f"pool de simulação indisponível: {exc}")
+
+        valid_row = pool.iloc[[valid_sample["sampled_index"]]].copy()
+        invalid_row = valid_row.copy()
+        invalid_row["residence_state"] = 999
+
+        original_pool = api._simulation_pool
+        try:
+            api._simulation_pool = pd.concat(
+                [invalid_row, valid_row],
+                ignore_index=True,
+            )
+            sample = api.escolher_caso_real_simulacao(seed=1)
+        finally:
+            api._simulation_pool = original_pool
+
+        self.assertEqual(sample["sampled_index"], 1)
+        self.assertIsNotNone(sample["observed_classification"])
 
     def test_simulation_random_response_shape_and_all_models(self):
         required_models = set(api.MODELOS_DISPONIVEIS)

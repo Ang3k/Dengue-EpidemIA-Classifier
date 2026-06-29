@@ -33,9 +33,10 @@ function Home() {
           </p>
           <p>
             <em>
-              Vale avisar: a triagem e a simulação abaixo mostram como o sistema
-              vai funcionar, mas ainda usam valores de exemplo. Elas ainda não
-              estão ligadas ao modelo que já foi treinado.
+              A triagem envia os dados preenchidos aos modelos treinados. Na
+              simulação abaixo, o sistema seleciona um registro histórico
+              anonimizado do conjunto de teste e compara sua classificação com
+              as probabilidades calculadas pelos modelos.
             </em>
           </p>
         </div>
