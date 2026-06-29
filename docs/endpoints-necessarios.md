@@ -35,7 +35,7 @@ Responsabilidades:
 
 - selecionar um caso real e anonimizado do conjunto de teste;
 - usar somente registros de 2019 com mês de notificação maior ou igual a junho;
-- executar os quatro modelos;
+- executar MLP, XGBoost e LightGBM;
 - retornar dados gerais, classificação observada e probabilidades;
 - alterar o simulador da Home;
 - criar os testes da simulação.
@@ -96,7 +96,7 @@ O backend deve:
 
 2. remover identificadores e campos desnecessários;
 3. executar o mesmo pré-processamento usado no treinamento;
-4. executar os quatro modelos;
+4. executar MLP, XGBoost e LightGBM;
 5. retornar os dados gerais, a classificação observada e as probabilidades.
 
 Uma `seed` poderá ser enviada para reproduzir uma simulação:
@@ -124,7 +124,7 @@ Resposta sugerida:
   "prediction": {
     "models": [
       {
-        "name": "logistic_regression",
+        "name": "mlp",
         "probability": 63.2
       },
       {
@@ -134,13 +134,9 @@ Resposta sugerida:
       {
         "name": "lightgbm",
         "probability": 71.4
-      },
-      {
-        "name": "decision_tree",
-        "probability": 52.8
       }
     ],
-    "average": 61.5,
+    "average": 64.4,
     "isDengue": true
   }
 }

@@ -37,7 +37,6 @@ from dengue_pipeline.sinan_mappings import (
     standardize_columns,
 )
 from dengue_pipeline.cbo_map import CBO_MAP
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -48,10 +47,9 @@ MODELS_DIR = Path(__file__).parent / "artifacts" / "models"
 PREPROCESS_PATH = MODELS_DIR / "ml_preprocess.joblib"
 
 MODELOS_DISPONIVEIS = {
-    "logistic_regression": "logistic_regression.joblib",
+    "mlp":                 "mlp.joblib",
     "xgboost":             "xgboost.joblib",
     "lightgbm":            "lightgbm.joblib",
-    "decision_tree":       "decision_tree.joblib",
 }
 
 modelos = {}
@@ -71,6 +69,8 @@ for nome, arquivo in MODELOS_DISPONIVEIS.items():
                 modelo_interno.set_params(
                     device=os.getenv("XGBOOST_DEVICE", "cpu")
                 )
+        elif nome == "mlp" and hasattr(modelo, "device"):
+            modelo.device = os.getenv("MLP_DEVICE", "auto")
         modelos[nome] = modelo
         logger.info("Modelo %s carregado", nome)
     except Exception as exc:
@@ -94,6 +94,15 @@ else:
 OCCUPATION_ENCODER = preprocess.get("occupation_encoder")
 RESIDENCE_STATE_ENCODER = preprocess.get("residence_state_encoder")
 DAYS_TO_NOTIFICATION_MEDIAN = preprocess.get("days_to_notification_median", 0.0)
+
+# Valores calculados pelo notebook model_evaluation.ipynb.
+# Cada peso é o recall do modelo dividido pela soma dos três recalls.
+ENSEMBLE_WEIGHTS = {
+    "mlp": 0.33245651147532945,
+    "xgboost": 0.3325592161335222,
+    "lightgbm": 0.33498427239114836,
+}
+ENSEMBLE_THRESHOLD = 0.08
 
 # ---------------------------------------------------------------------------
 # App
@@ -409,6 +418,7 @@ def _inferir_modelos(df: pd.DataFrame):
     features já construído."""
     resultados = []
     ignorados = []
+    probabilidades = {}
 
     for nome, modelo in modelos.items():
         df_alinhado, faltantes = alinhar_colunas(df.copy(), modelo)
@@ -432,6 +442,7 @@ def _inferir_modelos(df: pd.DataFrame):
                 raise ValueError("predict_proba retornou um array vazio")
             if not np.isfinite(prob) or not 0 <= prob <= 1:
                 raise ValueError(f"probabilidade inválida: {prob}")
+            probabilidades[nome] = prob
             resultados.append(
                 {
                     "name": nome,
@@ -456,11 +467,42 @@ def _inferir_modelos(df: pd.DataFrame):
             },
         )
 
-    media = round(sum(r["probability"] for r in resultados) / len(resultados), 1)
+    pesos_disponiveis = {
+        name: ENSEMBLE_WEIGHTS[name]
+        for name in probabilidades
+        if name in ENSEMBLE_WEIGHTS
+    }
+    if set(pesos_disponiveis) != set(probabilidades):
+        raise HTTPException(
+            status_code=503,
+            detail="A configuração do ensemble não corresponde aos modelos carregados.",
+        )
+
+    total_pesos = sum(pesos_disponiveis.values())
+    pesos_normalizados = {
+        name: weight / total_pesos
+        for name, weight in pesos_disponiveis.items()
+    }
+    for resultado in resultados:
+        resultado["weight"] = round(
+            pesos_normalizados[resultado["name"]] * 100,
+            1,
+        )
+
+    score_ponderado = float(
+        sum(
+            probabilidades[name] * pesos_normalizados[name]
+            for name in probabilidades
+        )
+    )
+    score_percentual = round(score_ponderado * 100, 1)
+    threshold_percentual = round(float(ENSEMBLE_THRESHOLD) * 100, 1)
     return {
         "models": resultados,
-        "average": media,
-        "isDengue": media >= 40,
+        "average": score_percentual,
+        "threshold": threshold_percentual,
+        "weighting": "recall",
+        "isDengue": score_ponderado >= float(ENSEMBLE_THRESHOLD),
         "ignored": ignorados,
     }
 
@@ -668,11 +710,17 @@ def health():
         ]
     )
     return {
-        "status": "ok" if not faltantes and preprocess_pronto else "degraded",
+        "status": (
+            "ok"
+            if not faltantes and preprocess_pronto
+            else "degraded"
+        ),
         "modelos_carregados": list(modelos.keys()),
         "modelos_ausentes": faltantes,
         "erros_carregamento": erros_carregamento,
         "preprocess_carregado": preprocess_pronto,
+        "ensemble_threshold": ENSEMBLE_THRESHOLD,
+        "ensemble_weights": ENSEMBLE_WEIGHTS,
     }
 
 
@@ -742,6 +790,8 @@ def simulation_random(payload: SimulacaoRandomRequest | None = None):
         "prediction": {
             "models": prediction["models"],
             "average": prediction["average"],
+            "threshold": prediction["threshold"],
+            "weighting": prediction["weighting"],
             "isDengue": prediction["isDengue"],
         },
     }
@@ -806,7 +856,7 @@ _OCUPACOES_REF = [
     for k, v in CBO_MAP.items()
 ]
 
-DENGUE_THRESHOLD = 40
+DENGUE_THRESHOLD = round(ENSEMBLE_THRESHOLD * 100, 1)
 
 # ---------------------------------------------------------------------------
 # GET /api/v1/triage/options
@@ -850,6 +900,7 @@ def triage_options():
         "ufs": ufs,
         "modelosAtivos": list(modelos.keys()),
         "liamiarClassificacao": DENGUE_THRESHOLD,
+        "pesosModelos": ENSEMBLE_WEIGHTS,
     }
 
 

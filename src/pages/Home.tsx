@@ -62,8 +62,8 @@ function Home() {
             úteis, como os sintomas em forma binária e suas combinações, a
             sazonalidade do ano em forma cíclica (a dengue tem pico no verão e no
             outono), o perfil demográfico e a região de residência, já que a
-            endemicidade muda bastante pelo país. Comparamos modelos de árvore
-            (XGBoost, LightGBM, árvore de decisão) e regressão logística.
+            endemicidade muda bastante pelo país. Comparamos uma rede neural
+            MLP com embeddings, XGBoost e LightGBM.
           </p>
           <p>
             Também tomamos cuidado para o modelo não trapacear. Nenhuma

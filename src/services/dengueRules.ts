@@ -10,11 +10,14 @@ export type TriageItem = {
 export type ModelPrediction = {
   name: string;
   probability: number;
+  weight: number;
 };
 
 export type EvaluationResult = {
   models: ModelPrediction[];
   average: number;
+  threshold: number;
+  weighting: "recall";
   isDengue: boolean;
 };
 
@@ -40,18 +43,14 @@ export type RandomSimulationResponse = {
   prediction: EvaluationResult;
 };
 
-// Acima deste valor (em %), o resultado final é considerado dengue
-export const DENGUE_THRESHOLD = 40;
-
 const API_URL = (
   import.meta.env.VITE_API_URL ?? "http://localhost:8000"
 ).replace(/\/+$/, "");
 
 const MODEL_LABELS: Record<string, string> = {
-  logistic_regression: "Regressão logística",
+  mlp: "MLP",
   xgboost: "XGBoost",
   lightgbm: "LightGBM",
-  decision_tree: "Árvore de decisão",
 };
 
 export function formatModelName(name: string): string {
@@ -145,6 +144,28 @@ function numberOrNull(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function mensagemErroApi(errorBody: unknown, status: number): string {
+  if (!errorBody || typeof errorBody !== "object") {
+    return `A API retornou o status ${status}.`;
+  }
+
+  const detail = (errorBody as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (!Array.isArray(detail)) return `A API retornou o status ${status}.`;
+
+  const messages = detail.flatMap(issue => {
+    if (!issue || typeof issue !== "object") return [];
+    const { loc, msg } = issue as { loc?: unknown[]; msg?: unknown };
+    if (typeof msg !== "string") return [];
+    const field = Array.isArray(loc) ? String(loc.at(-1) ?? "") : "";
+    return [field ? `${field}: ${msg}` : msg];
+  });
+
+  return messages.length > 0
+    ? messages.join(" | ")
+    : `A API retornou o status ${status}.`;
+}
+
 export function montarPayload(
   selectedIds: string[],
   patientData: PatientData
@@ -198,9 +219,7 @@ export async function solicitarPredicao(
     let detail = `A API retornou o status ${response.status}.`;
     try {
       const errorBody = await response.json();
-      if (typeof errorBody.detail === "string") {
-        detail = errorBody.detail;
-      }
+      detail = mensagemErroApi(errorBody, response.status);
     } catch {
       // A resposta não contém JSON; usa a mensagem baseada no status.
     }
@@ -213,6 +232,8 @@ export async function solicitarPredicao(
     typeof data !== "object" ||
     !Array.isArray((data as EvaluationResult).models) ||
     typeof (data as EvaluationResult).average !== "number" ||
+    typeof (data as EvaluationResult).threshold !== "number" ||
+    (data as EvaluationResult).weighting !== "recall" ||
     typeof (data as EvaluationResult).isDengue !== "boolean"
   ) {
     throw new Error("A API retornou uma resposta inválida.");
@@ -241,9 +262,7 @@ export async function solicitarSimulacaoRandom(
     let detail = `A API retornou o status ${response.status}.`;
     try {
       const errorBody = await response.json();
-      if (typeof errorBody.detail === "string") {
-        detail = errorBody.detail;
-      }
+      detail = mensagemErroApi(errorBody, response.status);
     } catch {
       // A resposta não contém JSON; usa a mensagem baseada no status.
     }
@@ -262,6 +281,8 @@ export async function solicitarSimulacaoRandom(
     !prediction ||
     !Array.isArray(prediction.models) ||
     typeof prediction.average !== "number" ||
+    typeof prediction.threshold !== "number" ||
+    prediction.weighting !== "recall" ||
     typeof prediction.isDengue !== "boolean"
   ) {
     throw new Error("A API retornou uma resposta inválida.");
@@ -274,5 +295,17 @@ export function avaliarDengue(
   selectedIds: string[],
   patientData: PatientData
 ): Promise<EvaluationResult> {
+  if (
+    patientData.notificationDate &&
+    patientData.symptomOnsetDate &&
+    patientData.notificationDate < patientData.symptomOnsetDate
+  ) {
+    return Promise.reject(
+      new Error(
+        "A data da notificação não pode ser anterior ao início dos sintomas."
+      )
+    );
+  }
+
   return solicitarPredicao(montarPayload(selectedIds, patientData));
 }

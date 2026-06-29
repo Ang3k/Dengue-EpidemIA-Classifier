@@ -104,9 +104,13 @@ para o treino:
 
 ## Modelagem
 
-O notebook é o `notebooks/modeling/models.ipynb`. Ali comparamos regressão
-logística, árvore de decisão, XGBoost e LightGBM. Os dois últimos passam pela
-classe `GradientBoostingDiseaseClassifier` (em `dengue_pipeline/models/`), que
+O notebook é o `notebooks/modeling/models.ipynb`. O conjunto atual usa três
+modelos: MLP, XGBoost e LightGBM. A `MLPDiseaseClassifier` adapta a rede neural
+do projeto original: embeddings para variáveis categóricas, BatchNorm e camadas
+densas 1024, 512, 256 e 128. O treinamento usa batches, validação interna e early
+stopping sem colocar o dataset inteiro na GPU.
+
+XGBoost e LightGBM passam pela classe `GradientBoostingDiseaseClassifier`, que
 ajusta os hiperparâmetros com o Optuna usando o PR-AUC (average precision) como
 métrica. Trocamos o recall por essa métrica porque otimizar só o recall acabava
 gerando um modelo que classificava quase tudo como positivo.
@@ -132,8 +136,14 @@ Algumas decisões importantes:
   ano, e que o próprio alvo depende em parte do critério da vigilância (em
   epidemia, muito caso é confirmado pelo critério clínico-epidemiológico).
 
-Os modelos treinados ficam em `artifacts/models/` e os gráficos de importância em
+Os modelos treinados ficam em `artifacts/models/` como `mlp.joblib`,
+`xgboost.joblib` e `lightgbm.joblib`. A MLP salva junto do modelo seus encoders,
+medianas, arquitetura e ordem das features. Os gráficos de importância ficam em
 `reports/figures/modeling/`.
+
+Depois de treinar os três modelos, execute
+`notebooks/modeling/model_evaluation.ipynb` para regenerar as métricas e figuras
+do conjunto atual. Resultados de modelos removidos não são mantidos.
 
 ## Como rodar a limpeza
 
@@ -142,6 +152,13 @@ Instalar as dependências:
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
+```
+
+Em uma máquina Windows com GPU NVIDIA, instale a variante CUDA oficial do
+PyTorch depois das demais dependências:
+
+```powershell
+.\.venv\Scripts\python -m pip install --force-reinstall --no-deps torch==2.11.0 --index-url https://download.pytorch.org/whl/cu130
 ```
 
 Gerar a base de ML:
@@ -186,6 +203,9 @@ encoders usados no treino.
 
 A API fica em `http://localhost:8000`. O endpoint `/health` informa quais
 modelos e artefatos de pré-processamento foram carregados.
+
+Por padrão, a MLP usa CUDA quando o PyTorch a detecta e CPU nos demais casos.
+Para forçar o dispositivo na API, defina `MLP_DEVICE=cpu` ou `MLP_DEVICE=cuda`.
 
 ### Como abrir o site
 

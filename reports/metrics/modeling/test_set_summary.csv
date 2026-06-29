@@ -1,9 +1,2 @@
-﻿item,value
-data_source,data/raw/parquet/DENGBR*.parquet
-period_start,2019-06
-period_end,2019-12
-n_samples,528608
-n_features,105
-n_confirmed,309627
-n_discarded,218981
-positive_rate,0.5857402839154913
+﻿split,period_start,period_end,n_samples,n_features,n_confirmed,n_discarded,positive_rate
+test,2019-06,2019-12,528608,105,309627,218981,0.5857402839154913

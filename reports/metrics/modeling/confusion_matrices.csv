@@ -1,17 +1,17 @@
 ﻿model,actual,predicted,count
-Regressão Logística,0,0,165
-Regressão Logística,0,1,218816
-Regressão Logística,1,0,65
-Regressão Logística,1,1,309562
-Árvore de Decisão,0,0,83348
-Árvore de Decisão,0,1,135633
-Árvore de Decisão,1,0,44477
-Árvore de Decisão,1,1,265150
-XGBoost,0,0,69092
-XGBoost,0,1,149889
-XGBoost,1,0,18187
-XGBoost,1,1,291440
-LightGBM,0,0,69452
-LightGBM,0,1,149529
-LightGBM,1,0,17779
-LightGBM,1,1,291848
+MLP,0,0,75181
+MLP,0,1,143800
+MLP,1,0,24058
+MLP,1,1,285569
+XGBoost,0,0,84564
+XGBoost,0,1,134417
+XGBoost,1,0,26747
+XGBoost,1,1,282880
+LightGBM,0,0,88512
+LightGBM,0,1,130469
+LightGBM,1,0,28068
+LightGBM,1,1,281559
+Ensemble,0,0,83278
+Ensemble,0,1,135703
+Ensemble,1,0,25178
+Ensemble,1,1,284449
