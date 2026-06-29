@@ -109,6 +109,8 @@ function Triage() {
           <Resultado
             models={resultado.models}
             average={resultado.average}
+            threshold={resultado.threshold}
+            weighting={resultado.weighting}
             isDengue={resultado.isDengue}
           />
         )}

@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  DENGUE_THRESHOLD,
   formatModelName,
   solicitarSimulacaoRandom,
 } from "../services/dengueRules";
@@ -16,8 +15,9 @@ type Pessoa = {
 };
 
 type Predicao = {
-  modelos: { name: string; probability: number }[];
+  modelos: { name: string; probability: number; weight: number }[];
   media: number;
+  threshold: number;
   ehDengue: boolean;
 };
 
@@ -51,6 +51,7 @@ function PredictionSimulator() {
       setPredicao({
         modelos: resultado.prediction.models,
         media: resultado.prediction.average,
+        threshold: resultado.prediction.threshold,
         ehDengue: resultado.prediction.isDengue,
       });
     } catch (error) {
@@ -144,6 +145,9 @@ function PredictionSimulator() {
                     <div className="sim-modelo-topo">
                       <span className="sim-modelo-nome">
                         {formatModelName(modelo.name)}
+                        <small className="sim-modelo-peso">
+                          Peso: {modelo.weight}%
+                        </small>
                       </span>
                       <span className="sim-modelo-prob">
                         {modelo.probability}%
@@ -160,7 +164,7 @@ function PredictionSimulator() {
               </div>
 
               <div className="sim-media">
-                <span className="sim-label">Probabilidade média</span>
+                <span className="sim-label">Score ponderado por recall</span>
                 <span className="sim-valor-destaque">{predicao.media}%</span>
               </div>
 
@@ -171,8 +175,8 @@ function PredictionSimulator() {
               >
                 {predicao.ehDengue ? "É dengue" : "Não é dengue"}
                 <small>
-                  Média {predicao.ehDengue ? "acima" : "abaixo"} do limiar de{" "}
-                  {DENGUE_THRESHOLD}%
+                  Score {predicao.ehDengue ? "acima" : "abaixo"} do limiar de{" "}
+                  {predicao.threshold}%
                 </small>
               </div>
             </div>

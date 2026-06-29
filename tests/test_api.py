@@ -63,6 +63,14 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(result["ignored"], [])
         self.assertGreaterEqual(result["average"], 0)
         self.assertLessEqual(result["average"], 100)
+        self.assertGreaterEqual(result["threshold"], 0)
+        self.assertLessEqual(result["threshold"], 100)
+        self.assertEqual(result["weighting"], "recall")
+        self.assertAlmostEqual(
+            sum(item["weight"] for item in result["models"]),
+            100,
+            delta=0.2,
+        )
 
     def test_notification_cannot_precede_symptom_onset(self):
         with self.assertRaises(ValidationError):
@@ -111,7 +119,7 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(set(result), {"case", "observedClassification", "prediction"})
         self.assertEqual(
             set(result["prediction"]),
-            {"models", "average", "isDengue"},
+            {"models", "average", "threshold", "weighting", "isDengue"},
         )
 
         case = result["case"]
@@ -127,9 +135,14 @@ class ApiTestCase(unittest.TestCase):
         for item in result["prediction"]["models"]:
             self.assertGreaterEqual(item["probability"], 0)
             self.assertLessEqual(item["probability"], 100)
+            self.assertGreaterEqual(item["weight"], 0)
+            self.assertLessEqual(item["weight"], 100)
 
         self.assertGreaterEqual(result["prediction"]["average"], 0)
         self.assertLessEqual(result["prediction"]["average"], 100)
+        self.assertGreaterEqual(result["prediction"]["threshold"], 0)
+        self.assertLessEqual(result["prediction"]["threshold"], 100)
+        self.assertEqual(result["prediction"]["weighting"], "recall")
         self.assertIsInstance(result["prediction"]["isDengue"], bool)
 
     # -----------------------------------------------------------------------
@@ -147,6 +160,7 @@ class ApiTestCase(unittest.TestCase):
         self.assertIn("ufs", result)
         self.assertIn("modelosAtivos", result)
         self.assertIn("liamiarClassificacao", result)
+        self.assertIn("pesosModelos", result)
 
         # Chaves de cada item
         self.assertTrue(all("code" in s and "name" in s for s in result["sexos"]))

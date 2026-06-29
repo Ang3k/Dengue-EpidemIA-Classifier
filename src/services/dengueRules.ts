@@ -10,11 +10,14 @@ export type TriageItem = {
 export type ModelPrediction = {
   name: string;
   probability: number;
+  weight: number;
 };
 
 export type EvaluationResult = {
   models: ModelPrediction[];
   average: number;
+  threshold: number;
+  weighting: "recall";
   isDengue: boolean;
 };
 
@@ -39,9 +42,6 @@ export type RandomSimulationResponse = {
   observedClassification: string | null;
   prediction: EvaluationResult;
 };
-
-// Acima deste valor (em %), o resultado final é considerado dengue
-export const DENGUE_THRESHOLD = 40;
 
 const API_URL = (
   import.meta.env.VITE_API_URL ?? "http://localhost:8000"
@@ -212,6 +212,8 @@ export async function solicitarPredicao(
     typeof data !== "object" ||
     !Array.isArray((data as EvaluationResult).models) ||
     typeof (data as EvaluationResult).average !== "number" ||
+    typeof (data as EvaluationResult).threshold !== "number" ||
+    (data as EvaluationResult).weighting !== "recall" ||
     typeof (data as EvaluationResult).isDengue !== "boolean"
   ) {
     throw new Error("A API retornou uma resposta inválida.");
@@ -261,6 +263,8 @@ export async function solicitarSimulacaoRandom(
     !prediction ||
     !Array.isArray(prediction.models) ||
     typeof prediction.average !== "number" ||
+    typeof prediction.threshold !== "number" ||
+    prediction.weighting !== "recall" ||
     typeof prediction.isDengue !== "boolean"
   ) {
     throw new Error("A API retornou uma resposta inválida.");

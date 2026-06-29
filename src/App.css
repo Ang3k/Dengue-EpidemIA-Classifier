@@ -315,6 +315,11 @@ h1 {
   font-weight: 600;
 }
 
+.modelo-quadrado-peso {
+  font-size: 12px;
+  color: #475569;
+}
+
 .predicao-media {
   display: flex;
   align-items: center;
@@ -379,6 +384,14 @@ h1 {
   font-size: 15px;
   font-weight: 600;
   color: #334155;
+}
+
+.sim-modelo-peso {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
 }
 
 .sim-modelo-prob {

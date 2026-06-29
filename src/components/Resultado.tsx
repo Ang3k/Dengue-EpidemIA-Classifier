@@ -1,10 +1,12 @@
-import {
-  DENGUE_THRESHOLD,
-  formatModelName,
-} from "../services/dengueRules";
+import { formatModelName } from "../services/dengueRules";
 import type { EvaluationResult } from "../services/dengueRules";
 
-function Resultado({ models, average, isDengue }: EvaluationResult) {
+function Resultado({
+  models,
+  average,
+  threshold,
+  isDengue,
+}: EvaluationResult) {
   return (
     <div className="resultado-triagem">
       <h2>Resultado da triagem</h2>
@@ -18,12 +20,15 @@ function Resultado({ models, average, isDengue }: EvaluationResult) {
             </span>
             <span className="modelo-quadrado-prob">{modelo.probability}%</span>
             <span className="modelo-quadrado-legenda">prob. de dengue</span>
+            <span className="modelo-quadrado-peso">
+              Peso no ensemble: {modelo.weight}%
+            </span>
           </div>
         ))}
       </div>
 
       <div className="predicao-media">
-        <span className="sim-label">Probabilidade média</span>
+        <span className="sim-label">Score ponderado por recall</span>
         <span className="sim-valor-destaque">{average}%</span>
       </div>
 
@@ -34,7 +39,7 @@ function Resultado({ models, average, isDengue }: EvaluationResult) {
       >
         {isDengue ? "É dengue" : "Não é dengue"}
         <small>
-          Média {isDengue ? "acima" : "abaixo"} do limiar de {DENGUE_THRESHOLD}%
+          Score {isDengue ? "acima" : "abaixo"} do limiar de {threshold}%
         </small>
       </div>
 
