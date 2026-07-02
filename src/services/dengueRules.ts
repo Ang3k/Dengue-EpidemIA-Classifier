@@ -130,12 +130,6 @@ export const triageItems: TriageItem[] = [
     points: 2,
     group: "symptoms",
   },
-  {
-    id: "tourniquet_test",
-    label: "Prova do laço positiva",
-    points: 3,
-    group: "clinical",
-  },
 ];
 
 function numberOrNull(value: string): number | null {

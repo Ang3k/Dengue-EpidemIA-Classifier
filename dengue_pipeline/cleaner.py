@@ -59,7 +59,6 @@ FINAL_COLUMN_ORDER = [
     "joint_pain",
     "petechiae",
     "retro_orbital_pain",
-    "tourniquet_test",
     # Atendimento, hospitalização e encerramento
     "hospitalized",
     "hospital_state",
@@ -133,8 +132,8 @@ class DengueDataCleaner:
     def limpar_angel(self):
         colunas = [
             "alarm_liver_enlarged", "infection_country", "severe_metrorrhagia",
-            "infection_municipality", "autoimmune_disease", "tourniquet_test",
-            "petechiae_hemorrh", "tourniquet_test_hemorrh", "severe_hypotension",
+            "infection_municipality", "autoimmune_disease",
+            "petechiae_hemorrh", "severe_hypotension",
             "kidney_disease", "retro_orbital_pain", "chik_clinical_form",
             "duplicate_flag", "dengue_hemorrhagic_fever", "hemorrhagic_evidence",
             "joint_pain", "headache", "severe_tachycardia",
@@ -354,10 +353,8 @@ class DengueDataCleaner:
 
         # SINAN: 1 = Sim, 2 = Não; ainda há ~58 NaN por coluna. Binarizamos com
         # == 1 para que 2/NaN (e qualquer código != 1) virem 0, deixando as
-        # colunas prontas para o modelo (sem NaN). O tourniquet_test (prova do
-        # laço) entra junto na binarização, mas fica fora da contagem de sintomas.
-        colunas_sintomas = sintomas + ["tourniquet_test"]
-        df_tratado[colunas_sintomas] = (df_tratado[colunas_sintomas] == 1).astype(int)
+        # colunas prontas para o modelo (sem NaN).
+        df_tratado[sintomas] = (df_tratado[sintomas] == 1).astype(int)
 
         interaction_columns = {
             f"{symptom_a}_and_{symptom_b}": (

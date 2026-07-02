@@ -73,8 +73,7 @@ No tratamento mais geral fazemos o seguinte:
 
 Já no `transformar_ml`, as principais mudanças nas colunas são:
 
-- os 12 sintomas e a prova do laço (`tourniquet_test`) saem do código do SINAN
-  (1/2/NaN) e viram binário 0/1;
+- os 12 sintomas saem do código do SINAN (1/2/NaN) e viram binário 0/1;
 - criamos agregados de sintomas: `number_of_symptoms`,
   `number_of_important_symptoms` e as interações entre pares de sintomas;
 - a sazonalidade (mês da notificação, mês de início dos sintomas e semana

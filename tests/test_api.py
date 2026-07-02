@@ -29,6 +29,7 @@ class ApiTestCase(unittest.TestCase):
     def test_features_include_current_and_legacy_date_columns(self):
         features = api.construir_features(self.patient)
 
+        self.assertNotIn("tourniquet_test", features.columns)
         self.assertEqual(features.loc[0, "notification_month"], 3)
         self.assertEqual(features.loc[0, "symptom_month"], 3)
         self.assertEqual(features.loc[0, "symptom_day"], 5)
@@ -205,6 +206,11 @@ class ApiTestCase(unittest.TestCase):
         self.assertTrue(all("code" in s and "name" in s for s in result["sexos"]))
         self.assertTrue(all("code" in s and "sigla" in s for s in result["ufs"]))
         self.assertTrue(all("id" in s and "label" in s for s in result["sintomas"]))
+        self.assertNotIn(
+            "tourniquet_test",
+            {item["id"] for item in result["sintomas"]},
+        )
+        self.assertNotIn("tourniquet_test", api.DadosPaciente.model_fields)
 
         # Todos os 27 estados
         self.assertEqual(len(result["ufs"]), 27)

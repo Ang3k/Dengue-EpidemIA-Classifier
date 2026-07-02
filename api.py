@@ -186,7 +186,6 @@ class DadosPaciente(BaseModel):
     joint_pain: int = Field(default=0, ge=0, le=1)
     petechiae: int = Field(default=0, ge=0, le=1)
     retro_orbital_pain: int = Field(default=0, ge=0, le=1)
-    tourniquet_test: int = Field(default=0, ge=0, le=1)
 
     # Hospitalização
     hospitalized: Literal[1, 2, 9] | None = None
@@ -276,7 +275,6 @@ SIMULATION_SOURCE_COLUMNS = (
     "joint_pain",
     "petechiae",
     "retro_orbital_pain",
-    "tourniquet_test",
     "hospitalized",
     "hospital_state",
     "final_classification",
@@ -430,7 +428,7 @@ def construir_features(dados: DadosPaciente) -> pd.DataFrame:
     row["days_to_notification"] = float(np.clip(dias, 0, 90))
 
     # --- sintomas (binários vindos do frontend) ---
-    for s in SINTOMAS + ["tourniquet_test"]:
+    for s in SINTOMAS:
         row[s] = int(getattr(dados, s, 0) == 1)
 
     # --- interações entre sintomas ---
@@ -666,7 +664,6 @@ def _build_patient_from_sample(row: pd.Series) -> DadosPaciente:
         joint_pain=_flag_from_sinan(row.get("joint_pain")),
         petechiae=_flag_from_sinan(row.get("petechiae")),
         retro_orbital_pain=_flag_from_sinan(row.get("retro_orbital_pain")),
-        tourniquet_test=_flag_from_sinan(row.get("tourniquet_test")),
         hospitalized=_one_of(row.get("hospitalized"), {1, 2, 9}),
         hospital_state=_to_int(row.get("hospital_state")),
     )
@@ -1076,7 +1073,6 @@ def triage_options():
             {"id": "joint_pain",         "label": "Dor nas articulações"},
             {"id": "petechiae",          "label": "Petéquias / pontos vermelhos na pele"},
             {"id": "retro_orbital_pain", "label": "Dor atrás dos olhos"},
-            {"id": "tourniquet_test",    "label": "Prova do laço positiva"},
         ],
         "ufs": ufs,
         "modelosAtivos": list(modelos.keys()),
