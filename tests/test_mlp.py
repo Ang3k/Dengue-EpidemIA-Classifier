@@ -79,6 +79,42 @@ class MLPDiseaseClassifierTestCase(unittest.TestCase):
 
         np.testing.assert_allclose(expected, received, rtol=1e-6, atol=1e-6)
 
+    def test_external_validation_does_not_fit_encoder_or_medians(self):
+        training = self.features.iloc[:96].copy()
+        training_target = self.target.iloc[:96]
+        validation = self.features.iloc[96:].copy()
+        validation_target = self.target.iloc[96:]
+        validation["occupation_code"] = 999_999
+        validation["age_years"] = 9_999
+
+        model = MLPDiseaseClassifier(
+            hidden_layers=(16,),
+            batch_size=32,
+            max_epochs=1,
+            patience=1,
+            device="cpu",
+            verbose=False,
+            random_state=42,
+        )
+        model.fit(
+            training,
+            training_target,
+            X_validation=validation,
+            y_validation=validation_target,
+        )
+
+        occupation_index = model.categorical_columns_.index(
+            "occupation_code"
+        )
+        learned_categories = model.categorical_encoder.categories_[
+            occupation_index
+        ]
+        self.assertNotIn(999_999, learned_categories)
+        self.assertAlmostEqual(
+            model.numerical_medians_["age_years"],
+            training["age_years"].median(),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

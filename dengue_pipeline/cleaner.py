@@ -1,22 +1,65 @@
-from itertools import combinations
+from __future__ import annotations
+
 from pathlib import Path
 
-import pandas as pd
 import numpy as np
-from sklearn.preprocessing import OrdinalEncoder
+import pandas as pd
 
-from .paths import (
-    PROJECT_ROOT,
-    RAW_CSV_DIR,
-    RAW_DENGUE_PARQUETS,
-    RAW_PARQUET_DIR,
+from .features import (
+    DATASET_METADATA_COLUMNS,
+    MODEL_FEATURE_COLUMNS,
+    SYMPTOM_COLUMNS,
+    build_ml_dataset,
 )
-from .sinan_mappings import add_sinan_cbo_labels, standardize_columns
+from .paths import PROJECT_ROOT
+from .sinan_mappings import (
+    BINARY_CLASSIFICATION_LABELS,
+    EDUCATION_LABELS,
+    PREGNANCY_LABELS,
+    RACE_LABELS,
+    REVERSE_CBO_MAP,
+    SEX_LABELS,
+    UF_LABELS,
+    standardize_columns,
+)
 
 
-FINAL_COLUMN_ORDER = [
-    # Paciente
+LEGACY_POSITIVE_CLASSIFICATIONS = frozenset({1, 2, 3, 4, 10, 11, 12})
+MODERN_POSITIVE_CLASSIFICATIONS = frozenset({10, 11, 12})
+NEGATIVE_CLASSIFICATIONS = frozenset({5})
+IGNORED_CLASSIFICATIONS = frozenset({0, 8, 9})
+
+REQUIRED_STANDARDIZED_COLUMNS = frozenset(
+    {
+        "age",
+        "sex",
+        "pregnancy_status",
+        "race",
+        "education_level",
+        "occupation_code",
+        "residence_state",
+        "residence_municipality",
+        "residence_health_region",
+        "disease_code",
+        "notification_date",
+        "notification_year",
+        "notification_epi_week",
+        "notif_municipality",
+        "notif_health_region",
+        "health_facility",
+        "symptom_onset_date",
+        "symptom_epi_week",
+        *SYMPTOM_COLUMNS,
+        "hospitalized",
+        "hospital_state",
+        "final_classification",
+    }
+)
+
+ANALYSIS_COLUMNS = (
+    "source_year",
     "age_years",
+    "sex",
     "sex_label",
     "pregnancy_status",
     "pregnancy_status_label",
@@ -26,12 +69,10 @@ FINAL_COLUMN_ORDER = [
     "education_level_label",
     "occupation_code",
     "occupation_name",
-    # Residência
     "residence_state",
     "residence_state_label",
     "residence_municipality",
     "residence_health_region",
-    # Notificação
     "disease_code",
     "notification_date",
     "notification_year",
@@ -41,412 +82,260 @@ FINAL_COLUMN_ORDER = [
     "notif_municipality",
     "notif_health_region",
     "health_facility",
-    # Início dos sintomas
     "symptom_onset_date",
     "days_to_notification",
     "symptom_epi_year",
     "symptom_epi_week_number",
-    # Sintomas e sinais auto-relatáveis/registrados
-    "fever",
-    "myalgia",
-    "headache",
-    "rash",
-    "vomiting",
-    "nausea",
-    "back_pain",
-    "conjunctivitis",
-    "arthritis",
-    "joint_pain",
-    "petechiae",
-    "retro_orbital_pain",
-    # Atendimento, hospitalização e encerramento
+    *SYMPTOM_COLUMNS,
     "hospitalized",
     "hospital_state",
     "hospital_state_label",
-    # Alvo
+    "final_classification_code",
     "final_classification",
     "final_classification_label",
-]
-
-ML_COLUMNS_TO_DROP = [
-    "race_label",
-    "education_level_label",
-    "occupation_name",
-    "residence_state_label",
-    "hospital_state_label",
-    "final_classification_label",
-    "notification_date",
-    "notification_day",
-    "notification_epi_week",
-    "symptom_onset_date",
-    "symptom_epi_year",         # ano absoluto: não generaliza, fora das features
-    "symptom_epi_week_number",  # crua: mantemos só a versão cíclica (sin/cos)
-    "hospitalized",
-    "hospital_state",
-]
+)
 
 
-def ordenar_colunas_finais(df):
-    colunas_ordenadas = [coluna for coluna in FINAL_COLUMN_ORDER if coluna in df.columns]
-    outras_colunas = [coluna for coluna in df.columns if coluna not in colunas_ordenadas]
-    return df[colunas_ordenadas + outras_colunas]
+def positive_classifications_for_year(year: int) -> frozenset[int]:
+    if 2014 <= year <= 2016:
+        return LEGACY_POSITIVE_CLASSIFICATIONS
+    if 2017 <= year <= 2021:
+        return MODERN_POSITIVE_CLASSIFICATIONS
+    raise ValueError(f"Unsupported dengue source year: {year}")
+
+
+def harmonize_final_classification(
+    values: pd.Series,
+    source_year: int,
+) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    positives = positive_classifications_for_year(source_year)
+    result = pd.Series(pd.NA, index=values.index, dtype="Int8")
+    result.loc[numeric.isin(NEGATIVE_CLASSIFICATIONS)] = 0
+    result.loc[numeric.isin(positives)] = 1
+    return result
+
+
+def classification_counts(values: pd.Series) -> dict[str, int]:
+    normalized = values.astype("string").fillna("").str.strip()
+    normalized = normalized.replace({"<NA>": "", "nan": ""})
+    return {
+        str(code): int(count)
+        for code, count in normalized.value_counts(dropna=False).items()
+    }
+
+
+def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
+    return pd.to_numeric(frame[column], errors="coerce")
+
+
+def _map_numeric(values: pd.Series, mapping: dict) -> pd.Series:
+    return pd.to_numeric(values, errors="coerce").map(mapping)
+
+
+def _parse_age_years(values: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    units = np.floor(numeric / 1000)
+    amounts = numeric.mod(1000)
+    years = pd.Series(np.nan, index=values.index, dtype="float64")
+    years.loc[units.eq(4)] = amounts.loc[units.eq(4)]
+    years.loc[units.eq(3)] = amounts.loc[units.eq(3)] / 12
+    years.loc[units.eq(2)] = amounts.loc[units.eq(2)] / 365
+    years.loc[units.eq(1)] = amounts.loc[units.eq(1)] / 8760
+    direct_age = numeric.between(0, 130) & ~units.isin([1, 2, 3, 4])
+    years.loc[direct_age] = numeric.loc[direct_age]
+    return years.where(years.between(0, 130))
 
 
 class DengueDataCleaner:
+    """Stateless, chunk-oriented transformation for SINAN dengue extracts."""
+
     def __init__(self, arquivos=None):
-        self.occupation_encoder = None
-        self.residence_state_encoder = None
-        self.days_to_notification_median = None
-
         if arquivos is None:
-            arquivos = RAW_DENGUE_PARQUETS
+            self.arquivos: tuple[Path, ...] = ()
         elif isinstance(arquivos, (str, Path)):
-            arquivos = [arquivos]
+            self.arquivos = (Path(arquivos),)
+        else:
+            self.arquivos = tuple(Path(path) for path in arquivos)
 
-        self.arquivos = [Path(arquivo) for arquivo in arquivos]
-        self.df = self.carregar()
+    @staticmethod
+    def validate_raw_schema(frame: pd.DataFrame) -> None:
+        standardized = {
+            standardize_columns(pd.DataFrame(columns=[column])).columns[0]
+            for column in frame.columns
+        }
+        missing = REQUIRED_STANDARDIZED_COLUMNS - standardized
+        if missing:
+            raise ValueError(
+                "Required SINAN columns are missing: "
+                f"{sorted(missing)}"
+            )
 
-    def carregar(self):
-        dfs = []
+    @staticmethod
+    def transformar_analise_chunk(
+        raw_frame: pd.DataFrame,
+        source_year: int,
+    ) -> pd.DataFrame:
+        positive_classifications_for_year(source_year)
+        raw_frame = raw_frame.copy()
+        raw_frame.columns = raw_frame.columns.astype(str).str.upper()
+        frame = standardize_columns(raw_frame)
 
-        for arquivo in self.arquivos:
-            fallback_dir = RAW_CSV_DIR if arquivo.suffix.lower() == ".csv" else RAW_PARQUET_DIR
-            if not arquivo.exists() and (fallback_dir / arquivo.name).exists():
-                arquivo = fallback_dir / arquivo.name
+        missing = REQUIRED_STANDARDIZED_COLUMNS - set(frame.columns)
+        if missing:
+            raise ValueError(
+                f"Year {source_year} is missing required columns: "
+                f"{sorted(missing)}"
+            )
 
-            if arquivo.suffix.lower() == ".csv":
-                dfs.append(pd.read_csv(arquivo))
-            else:
-                dfs.append(pd.read_parquet(arquivo))
-
-        return standardize_columns(pd.concat(dfs, ignore_index=True))
-
-    def remover_colunas_iguais(self, df):
-        for coluna in list(df.columns):
-            if df[coluna].isnull().all():
-                df = df.drop(coluna, axis=1)
-            elif df[coluna].nunique() == 1:
-                df = df.drop(coluna, axis=1)
-        return df
-
-    def limpar_angel(self):
-        colunas = [
-            "alarm_liver_enlarged", "infection_country", "severe_metrorrhagia",
-            "infection_municipality", "autoimmune_disease",
-            "petechiae_hemorrh", "severe_hypotension",
-            "kidney_disease", "retro_orbital_pain", "chik_clinical_form",
-            "duplicate_flag", "dengue_hemorrhagic_fever", "hemorrhagic_evidence",
-            "joint_pain", "headache", "severe_tachycardia",
-            "alarm_hematocrit_rise", "symptom_onset_date", "symptom_epi_week", "severe_hematemesis",
-            "final_classification", "hematuria", "viral_isolation_result", "rash",
-            "vomiting", "birth_date", "notification_date", "severe_weak_pulse", "race",
-            "alarm_low_platelets", "alarm_signs_date", "severe_bleeding",
-            "plasma_leakage", "petechiae", "pregnancy_status",
-            "severe_ast_elevated", "severe_cap_refill", "severe_myocarditis",
-            "severe_convulsions",
-        ]
-
-        df = self.df[colunas].copy()
-
-        cols_leakage = [
-            "confirmation_criteria", "case_closure_date", "alarm_hypotension",
-            "alarm_low_platelets", "alarm_persistent_vomit", "alarm_bleeding",
-            "alarm_hematocrit_rise", "alarm_abdominal_pain", "alarm_lethargy",
-            "alarm_liver_enlarged", "alarm_fluid_accumul", "alarm_signs_date",
-            "severe_weak_pulse", "severe_convulsions", "severe_cap_refill",
-            "severe_resp_distress", "severe_tachycardia", "severe_cold_extremities",
-            "severe_hypotension", "severe_hematemesis", "severe_melena",
-            "severe_metrorrhagia", "severe_bleeding", "severe_ast_elevated",
-            "severe_myocarditis", "severe_altered_consc", "severe_organ_damage",
-            "severity_signs_date", "infection_country", "infection_municipality",
-        ]
-        df = df.drop(cols_leakage, axis=1, errors="ignore")
-        df = self.remover_colunas_iguais(df)
-
-        df["birth_date"] = pd.to_datetime(df["birth_date"], errors="coerce")
-        df["birth_year_derived"] = df["birth_date"].dt.year
-        df = df.drop(["birth_date", "birth_year_derived"], axis=1, errors="ignore")
-        df["notification_date"] = pd.to_datetime(df["notification_date"], errors="coerce")
-        df["symptom_onset_date"] = pd.to_datetime(df["symptom_onset_date"], errors="coerce")
-        df["days_to_notification"] = (df["notification_date"] - df["symptom_onset_date"]).dt.days
-
-        df = df.drop(["autoimmune_disease", "kidney_disease"], axis=1, errors="ignore")
-        df = df.drop(
-            ["chik_clinical_form", "viral_isolation_result"],
-            axis=1,
-            errors="ignore",
+        target_code = _numeric(frame, "final_classification")
+        target = harmonize_final_classification(
+            frame["final_classification"],
+            source_year,
         )
+        valid = target.notna()
+        frame = frame.loc[valid].copy()
+        target_code = target_code.loc[valid]
+        target = target.loc[valid].astype("int8")
 
-        df["symptom_epi_year"] = df["symptom_epi_week"] // 100
-        df["symptom_epi_week_number"] = df["symptom_epi_week"] % 100
-        df = df.drop(columns=["symptom_epi_week"])
-
-        df["final_classification"] = df["final_classification"].map({
-            5: 0,
-            10: 1,
-            11: 1,
-            12: 1,
-        })
-        df = df[df["final_classification"].notna()].copy()
-
-        return df
-
-    def limpar_pedro(self):
-        colunas = [
-            "residence_health_region", "notification_date", "disease_code",
-            "fever", "notification_year", "sex", "autochthonous_case",
-            "hospitalized", "health_facility", "occupation_code", "nausea",
-            "notif_health_region", "residence_state", "age",
-        ]
-
-        df = self.df[colunas].copy()
-
-        def parse_idade(valor):
-            try:
-                s = str(int(valor)).zfill(4)
-                unidade = int(s[0])
-                numero = int(s[1:])
-                if unidade == 4:
-                    return numero
-                elif unidade == 3:
-                    return numero / 12
-                elif unidade == 2:
-                    return numero / 365
-                elif unidade == 1:
-                    return numero / 8760
-                else:
-                    return None
-            except:
-                return None
-
-        df["age_years"] = df["age"].apply(parse_idade)
-        df = df.drop(columns=["age"])
-
-        df["notification_date"] = pd.to_datetime(df["notification_date"], format="%Y-%m-%d")
-        df["notification_month"] = df["notification_date"].dt.month
-        df["notification_day"] = df["notification_date"].dt.day
-        df = df.drop(columns=["notification_date"])
-
-        df["occupation_code"] = df["occupation_code"].fillna(0)
-        df = df.drop(columns=["autochthonous_case"])
-
-        return df
-
-    def limpar_ruan(self):
-        minhas_colunas = [
-            "pcr_date", "hospital_state", "death_date", "prnt_result",
-            "hemorrhagic_manifest", "arthritis", "blood_disorder",
-            "chik_test1_result", "infection_state", "serology_result", "myalgia",
-            "prnt_date", "severe_organ_damage", "ns1_test_date",
-            "investigation_date", "alarm_abdominal_pain", "notif_state",
-            "immunohistochemistry", "serotype", "severe_resp_distress",
-            "peptic_ulcer", "conjunctivitis", "nosebleed", "flow_received",
-            "back_pain", "notification_type", "notif_municipality",
-            "notification_epi_week", "hospitalization_date", "hypertension",
-            "liver_disease", "residence_municipality", "alarm_fluid_accumul",
-            "symptom_onset_date", "metrorrhagia", "system_type", "histopathology",
-            "education_level", "severe_altered_consc",
-        ]
-
-        df = self.df[minhas_colunas].copy()
-
-        col = [
-            "serotype", "infection_state", "ns1_test_date", "pcr_date",
-            "death_date", "prnt_date", "prnt_result", "chik_test1_result",
-            "serology_result", "alarm_abdominal_pain", "alarm_fluid_accumul",
-            "severe_organ_damage", "severe_altered_consc", "severe_resp_distress",
-            "histopathology", "immunohistochemistry",
-        ]
-        df = df.drop(columns=col)
-        df = self.remover_colunas_iguais(df)
-
-        col = ["blood_disorder", "liver_disease", "hypertension", "peptic_ulcer"]
-        df = df.drop(columns=col, errors="ignore")
-
-        col = ["investigation_date", "hospitalization_date", "notif_state", "notification_type"]
-        df = df.drop(columns=col)
-
-        return df
-
-    def juntar(self, df_angel, df_pedro, df_ruan):
-        df = pd.concat([df_angel, df_pedro, df_ruan], axis=1, join="inner")
-        df = df.loc[:, ~df.columns.duplicated()]
-        df = add_sinan_cbo_labels(df.reset_index(drop=True))
-        return ordenar_colunas_finais(df)
-
-    def transformar_analise(self):
-        df_angel = self.limpar_angel()
-        df_pedro = self.limpar_pedro()
-        df_ruan = self.limpar_ruan()
-        return self.juntar(df_angel, df_pedro, df_ruan)
-
-    def transformar_ml(self, df_tratado=None):
-        if df_tratado is None:
-            df_tratado = self.transformar_analise()
-
-        # One Hot Encoding para sexo
-        df_tratado = pd.get_dummies(df_tratado, columns=["sex_label"], dtype=int)
-        df_tratado = df_tratado.drop(columns=["sex"], errors="ignore")
-        df_tratado = df_tratado.rename(columns={
-            "sex_label_Feminino": "sex_Female",
-            "sex_label_Ignorado": "sex_Ignored",
-            "sex_label_Masculino": "sex_Male",
-        }).copy()
-
-        # Raça permanece em one-hot.
-        df_tratado["race"] = (
-            df_tratado["race"].astype("Int64").astype("string")
-        )
-        df_tratado = pd.get_dummies(
-            df_tratado,
-            columns=["race"],
-            dtype=int,
-        )
-
-        # Estado fica em uma única coluna ordinal para comparação com one-hot.
-        # O valor 0 é reservado para ausente ou desconhecido.
-        self.residence_state_encoder = OrdinalEncoder(
-            handle_unknown="use_encoded_value",
-            unknown_value=-1,
-        )
-        residence_state = (
-            df_tratado[["residence_state"]]
-            .astype("Int64")
-            .astype("string")
-        )
-        residence_state = residence_state.astype(object).where(
-            residence_state.notna(),
-            np.nan,
-        )
-        df_tratado[["residence_state"]] = (
-            self.residence_state_encoder.fit_transform(residence_state) + 1
-        )
-        df_tratado["residence_state"] = (
-            df_tratado["residence_state"].fillna(0).astype(int)
-        )
-
-        # Analise ciclica de meses do ano e semanas epidemiológicas
-        # Aqui, temos os meses representados num circulo --> (cos, sen)
-        df_tratado["notification_month_sin"] = np.sin(2 * np.pi * df_tratado["notification_month"] / 12)
-        df_tratado["notification_month_cos"] = np.cos(2 * np.pi * df_tratado["notification_month"] / 12)
-
-        # Max da semana epidemiológica é 53
-        df_tratado["symptom_epi_week_number_sin"] = np.sin(2 * np.pi * df_tratado["symptom_epi_week_number"] / 53)
-        df_tratado["symptom_epi_week_number_cos"] = np.cos(2 * np.pi * df_tratado["symptom_epi_week_number"] / 53)
-
-        # Mês do início dos sintomas em forma cíclica (sin/cos), igual aos demais
-        # sinais de sazonalidade. Não guardamos a versão crua/linear nem o dia.
-        symptom_onset = pd.to_datetime(
-            df_tratado["symptom_onset_date"],
+        notification_date = pd.to_datetime(
+            frame["notification_date"],
             errors="coerce",
         )
-        symptom_month = symptom_onset.dt.month
-        df_tratado["symptom_month_sin"] = np.sin(2 * np.pi * symptom_month / 12)
-        df_tratado["symptom_month_cos"] = np.cos(2 * np.pi * symptom_month / 12)
-
-        # Criar uma coluna para quantidade total de sintomas.
-        sintomas = [
-            "fever", "myalgia", "headache", "rash", "vomiting", "nausea",
-            "back_pain", "conjunctivitis", "arthritis", "joint_pain",
-            "petechiae", "retro_orbital_pain",
-        ]
-
-        # SINAN: 1 = Sim, 2 = Não; ainda há ~58 NaN por coluna. Binarizamos com
-        # == 1 para que 2/NaN (e qualquer código != 1) virem 0, deixando as
-        # colunas prontas para o modelo (sem NaN).
-        df_tratado[sintomas] = (df_tratado[sintomas] == 1).astype(int)
-
-        interaction_columns = {
-            f"{symptom_a}_and_{symptom_b}": (
-                df_tratado[symptom_a] * df_tratado[symptom_b]
-            ).astype("int8")
-            for symptom_a, symptom_b in combinations(sintomas, 2)
-        }
-        df_tratado = pd.concat(
-            [
-                df_tratado,
-                pd.DataFrame(interaction_columns, index=df_tratado.index),
-            ],
-            axis=1,
-        )
-
-        # Agora 1 = Tem ; 0 = Não tem
-        df_tratado["number_of_symptoms"] = df_tratado[sintomas].sum(axis=1)
-
-        # Rash e Retro Orbital Pain são os sintomas que apresentam maior gap relativo entre descartados x confirmados
-        sintomas_importantes = ["rash", "retro_orbital_pain"]
-
-        df_tratado["number_of_important_symptoms"] = df_tratado[sintomas_importantes].sum(axis=1)
-
-        # Ordinal Encoding na escolaridade
-        map_escolaridade = {
-            "Ignorado": 0,
-            None: 0,
-            "Não se aplica": 0,
-
-            "Analfabeto": 1,
-
-            "1ª a 4ª série incompleta": 2,
-            "4ª série completa": 2,
-            "5ª à 8ª série incompleta": 2,
-
-            "Ensino fundamental completo": 3,
-
-            "Ensino médio incompleto": 4,
-            "Ensino médio completo": 4,
-
-            "Educação superior incompleta": 5,
-            "Educação superior completa": 5,
-        }
-
-        df_tratado["education_level"] = df_tratado["education_level_label"].map(map_escolaridade)
-
-        df_tratado = df_tratado.drop(columns=["disease_code"])  # Disease_code todos são A90.
-
-        days_to_notification = pd.to_numeric(
-            df_tratado["days_to_notification"],
+        symptom_onset_date = pd.to_datetime(
+            frame["symptom_onset_date"],
             errors="coerce",
         )
-        self.days_to_notification_median = days_to_notification.median()
-        df_tratado["days_to_notification"] = (
-            days_to_notification
-            .fillna(self.days_to_notification_median)
-            .clip(0, 90)
+        symptom_epi_week = _numeric(frame, "symptom_epi_week")
+
+        output = pd.DataFrame(index=frame.index)
+        output["source_year"] = np.int16(source_year)
+        output["age_years"] = _parse_age_years(frame["age"])
+        output["sex"] = frame["sex"].astype("string").str.upper()
+        output["sex_label"] = output["sex"].map(SEX_LABELS)
+
+        for column in (
+            "pregnancy_status",
+            "race",
+            "education_level",
+            "occupation_code",
+            "residence_state",
+            "residence_municipality",
+            "residence_health_region",
+            "notification_epi_week",
+            "notif_municipality",
+            "notif_health_region",
+            "health_facility",
+            "hospitalized",
+            "hospital_state",
+        ):
+            output[column] = _numeric(frame, column)
+
+        output["pregnancy_status_label"] = _map_numeric(
+            frame["pregnancy_status"],
+            PREGNANCY_LABELS,
+        )
+        output["race_label"] = _map_numeric(frame["race"], RACE_LABELS)
+        output["education_level_label"] = _map_numeric(
+            frame["education_level"],
+            EDUCATION_LABELS,
+        )
+        output["occupation_name"] = _numeric(
+            frame,
+            "occupation_code",
+        ).map(REVERSE_CBO_MAP)
+        output["residence_state_label"] = _map_numeric(
+            frame["residence_state"],
+            UF_LABELS,
         )
 
-        # Gravidez agora é binario, 1 para sim e 0 para não. Alem disso, temos agora uma coluna
-        # binaria para dizer se a gravidez foi informada (exclui o caso dos homens e ignorado)
-        
-        df_tratado["pregnancy"] = df_tratado["pregnancy_status"].isin([1, 2, 3, 4]).astype(int)
-        df_tratado["pregnancy_informed"] = df_tratado["pregnancy_status"].isin([1, 2, 3, 4, 5]).astype(int)
-        df_tratado = df_tratado.drop(columns=["pregnancy_status_label", "pregnancy_status"], errors="ignore").copy()
-
-        self.occupation_encoder = OrdinalEncoder(
-            handle_unknown="use_encoded_value",
-            unknown_value=-1,
+        output["disease_code"] = frame["disease_code"].astype("string")
+        output["notification_date"] = notification_date
+        output["notification_year"] = np.int16(source_year)
+        output["notification_month"] = notification_date.dt.month.astype(
+            "Int8"
         )
-        occupation = df_tratado[["occupation_code"]].astype("string")
-        occupation = occupation.replace("0", pd.NA)
-        occupation = occupation.astype(object).where(occupation.notna(), np.nan)
-        df_tratado[["occupation_code"]] = (
-            self.occupation_encoder.fit_transform(occupation) + 1
+        output["notification_day"] = notification_date.dt.day.astype("Int8")
+        output["symptom_onset_date"] = symptom_onset_date
+        output["days_to_notification"] = (
+            notification_date - symptom_onset_date
+        ).dt.days
+        output["symptom_epi_year"] = (
+            symptom_epi_week.floordiv(100).astype("Int16")
         )
-        df_tratado["occupation_code"] = (
-            df_tratado["occupation_code"].fillna(0).astype(int)
+        output["symptom_epi_week_number"] = (
+            symptom_epi_week.mod(100).astype("Int8")
         )
 
-        # A data de início já está representada pelo ano, semana epidemiológica
-        # e pelas versões cíclicas da semana.
-        df_tratado = df_tratado.drop(
-            columns=ML_COLUMNS_TO_DROP,
-            errors="ignore",
+        for symptom in SYMPTOM_COLUMNS:
+            output[symptom] = _numeric(frame, symptom).astype("Float32")
+
+        output["hospital_state_label"] = _map_numeric(
+            frame["hospital_state"],
+            UF_LABELS,
+        )
+        output["final_classification_code"] = target_code.astype("int8")
+        output["final_classification"] = target
+        output["final_classification_label"] = target.map(
+            BINARY_CLASSIFICATION_LABELS
         )
 
-        return df_tratado
+        return output.loc[:, ANALYSIS_COLUMNS].reset_index(drop=True)
 
-    def salvar_df(self, df, caminho_saida):
-        caminho_saida = Path(caminho_saida)
-        if not caminho_saida.is_absolute():
-            caminho_saida = PROJECT_ROOT / caminho_saida
-        caminho_saida.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(caminho_saida, index=False)
+    @staticmethod
+    def transformar_ml(
+        analysis_frame: pd.DataFrame,
+    ) -> pd.DataFrame:
+        return build_ml_dataset(analysis_frame)
+
+    def carregar(self, arquivo: str | Path | None = None) -> pd.DataFrame:
+        path = Path(arquivo) if arquivo is not None else None
+        if path is None:
+            if len(self.arquivos) != 1:
+                raise ValueError(
+                    "carregar() requires one explicit file in the "
+                    "chunk-oriented pipeline"
+                )
+            path = self.arquivos[0]
+
+        if path.suffix.lower() == ".csv":
+            return pd.read_csv(path, low_memory=False)
+        return pd.read_parquet(path)
+
+    def transformar_analise(
+        self,
+        raw_frame: pd.DataFrame | None = None,
+        source_year: int | None = None,
+    ) -> pd.DataFrame:
+        if raw_frame is None:
+            raw_frame = self.carregar()
+        if source_year is None:
+            years = pd.to_numeric(
+                standardize_columns(raw_frame)["notification_year"],
+                errors="coerce",
+            ).dropna().unique()
+            if len(years) != 1:
+                raise ValueError("source_year is required for mixed-year data")
+            source_year = int(years[0])
+        return self.transformar_analise_chunk(raw_frame, source_year)
+
+    @staticmethod
+    def salvar_df(df: pd.DataFrame, caminho_saida: str | Path) -> None:
+        path = Path(caminho_saida)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(path, index=False)
+
+
+__all__ = [
+    "ANALYSIS_COLUMNS",
+    "DATASET_METADATA_COLUMNS",
+    "DengueDataCleaner",
+    "IGNORED_CLASSIFICATIONS",
+    "MODEL_FEATURE_COLUMNS",
+    "NEGATIVE_CLASSIFICATIONS",
+    "classification_counts",
+    "harmonize_final_classification",
+    "positive_classifications_for_year",
+]

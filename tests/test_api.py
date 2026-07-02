@@ -5,6 +5,11 @@ import pandas as pd
 from pydantic import ValidationError
 
 import api
+from dengue_pipeline.features import (
+    FEATURE_SCHEMA_VERSION,
+    MODEL_FEATURE_COLUMNS,
+    build_model_features,
+)
 
 
 class ApiTestCase(unittest.TestCase):
@@ -26,15 +31,26 @@ class ApiTestCase(unittest.TestCase):
             headache=1,
         )
 
-    def test_features_include_current_and_legacy_date_columns(self):
+    def test_features_use_the_shared_schema(self):
         features = api.construir_features(self.patient)
 
+        self.assertEqual(
+            list(features.columns),
+            list(MODEL_FEATURE_COLUMNS),
+        )
         self.assertNotIn("tourniquet_test", features.columns)
-        self.assertEqual(features.loc[0, "notification_month"], 3)
-        self.assertEqual(features.loc[0, "symptom_month"], 3)
-        self.assertEqual(features.loc[0, "symptom_day"], 5)
         self.assertEqual(features.loc[0, "days_to_notification"], 3)
-        self.assertTrue(np.isfinite(features.to_numpy()).all())
+        self.assertEqual(features.loc[0, "number_of_reported_symptoms"], 3)
+        self.assertFalse(np.isinf(features.to_numpy()).any())
+
+    def test_api_and_pipeline_build_identical_features(self):
+        expected = build_model_features(
+            pd.DataFrame([self.patient.model_dump()])
+        )
+        pd.testing.assert_frame_equal(
+            api.construir_features(self.patient),
+            expected,
+        )
 
     def test_required_models_are_mlp_xgboost_and_lightgbm(self):
         self.assertEqual(
@@ -54,7 +70,7 @@ class ApiTestCase(unittest.TestCase):
                 self.assertIsNotNone(aligned)
 
     def test_prediction_uses_every_loaded_model(self):
-        if not api.modelos or not api.preprocess:
+        if not api.modelos or not api.artifact_set_compatible:
             self.skipTest("artefatos de inferência indisponíveis")
 
         result = api.predict(self.patient)
@@ -89,12 +105,12 @@ class ApiTestCase(unittest.TestCase):
         years = pd.to_numeric(pool["notification_year"], errors="coerce")
         months = pd.to_datetime(pool["notification_date"], errors="coerce").dt.month
         classifications = pd.to_numeric(
-            pool["final_classification"],
+            pool["final_classification_code"],
             errors="coerce",
         )
 
         self.assertFalse(pool.empty)
-        self.assertTrue((years == 2019).all())
+        self.assertTrue((years == 2021).all())
         self.assertTrue(
             (months >= api.SIMULATION_NOTIFICATION_MONTH_MIN).all()
         )
@@ -105,7 +121,7 @@ class ApiTestCase(unittest.TestCase):
         )
         self.assertTrue(pool["final_classification_label"].notna().all())
         self.assertEqual(set(pool.columns), set(api.SIMULATION_POOL_COLUMNS))
-        self.assertEqual(len(pool), 528_608)
+        self.assertEqual(len(pool), 940_304)
 
     def test_simulation_sampler_is_reproducible_with_seed(self):
         try:
@@ -121,6 +137,18 @@ class ApiTestCase(unittest.TestCase):
             sample_b["observed_classification"],
         )
         self.assertIsNotNone(sample_a["observed_classification"])
+
+    def test_simulation_patient_preserves_feature_values(self):
+        try:
+            pool = api._load_simulation_pool()
+        except Exception as exc:
+            self.skipTest(f"pool de simulação indisponível: {exc}")
+
+        row = pool.iloc[0]
+        patient = api._build_patient_from_sample(row)
+        expected = build_model_features(pd.DataFrame([row]))
+        received = api.construir_features(patient)
+        pd.testing.assert_frame_equal(received, expected)
 
     def test_simulation_sampler_skips_invalid_historical_row(self):
         try:
@@ -151,8 +179,8 @@ class ApiTestCase(unittest.TestCase):
 
         if not required_models.issubset(set(api.modelos)):
             self.skipTest("nem todos os modelos necessários estão carregados")
-        if api.OCCUPATION_ENCODER is None or api.RESIDENCE_STATE_ENCODER is None:
-            self.skipTest("encoders de pré-processamento indisponíveis")
+        if not api.artifact_set_compatible:
+            self.skipTest("manifestos de artefatos indisponíveis")
 
         result = api.simulation_random(api.SimulacaoRandomRequest(seed=42))
 
@@ -217,6 +245,17 @@ class ApiTestCase(unittest.TestCase):
 
         # Modelos ativos batem com os carregados
         self.assertEqual(set(result["modelosAtivos"]), set(api.modelos.keys()))
+
+    def test_health_exposes_temporal_artifact_compatibility(self):
+        result = api.health()
+
+        self.assertEqual(
+            result["feature_schema_version"],
+            FEATURE_SCHEMA_VERSION,
+        )
+        self.assertIn("artefatos_compativeis", result)
+        self.assertIn("periodos", result)
+        self.assertNotIn("preprocess_carregado", result)
 
     def test_occupations_search_starts_with_priority(self):
         result = api.buscar_ocupacoes(query="medico", limit=10)

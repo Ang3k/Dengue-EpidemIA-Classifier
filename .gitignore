@@ -27,4 +27,10 @@ __pycache__/
 *.sw?
 *.csv
 !reports/metrics/modeling/*.csv
+!reports/data/*.csv
+data/raw/downloads/
+data/raw/parquet/
+data/processed/analysis/
+data/processed/ml/
+data/processed/dengue_tratado_ml.parquet
 *.pyc

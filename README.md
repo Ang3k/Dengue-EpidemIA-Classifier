@@ -1,225 +1,88 @@
-# IML-Dengue
+# Dengue Sense Classifier
 
-Projeto de machine learning sobre dengue usando os dados públicos do SINAN (2017
-a 2019). A ideia é tratar os dados, fazer a análise exploratória e treinar um
-modelo que separa os casos confirmados dos casos descartados. Esse modelo é a
-base de um site de triagem de suspeitas.
+Classificador de confirmação versus descarte de dengue com dados públicos do SINAN. O pipeline usa somente informações disponíveis na notificação; exames, encerramento, evolução e sinais posteriores não entram nas features.
 
-## Objetivo
+## Recorte temporal
 
-A pergunta que o modelo tenta responder é epidemiológica: com o que se sabe de um
-caso na hora da notificação (sintomas, perfil do paciente, local e época do ano),
-qual a chance de ele ser dengue confirmada? O alvo é a coluna
-`final_classification`, que reduzimos para `0 = descartado` e `1 = confirmado`.
+| Uso | Anos | Casos rotulados |
+|---|---:|---:|
+| Treino | 2014–2019 | 7.723.448 |
+| Validação, Optuna, early stopping, pesos e limiar | 2020 | 1.331.664 |
+| Teste final e simulação histórica | 2021 | 940.304 |
+| Total bruto | 2014–2021 | 11.441.770 |
+| Total rotulado | 2014–2021 | 9.995.416 |
 
-## Organização
+Anos anteriores a 2014 e 2022 em diante estão fora do projeto. O teste de 2021 não pode alterar modelos, hiperparâmetros, encoders, medianas, pesos ou limiar.
 
-```text
-dengue_pipeline/       código Python reutilizável
-  cleaner.py           classe DengueDataCleaner (limpeza e features)
-  sinan_mappings.py    renomeio de colunas e rótulos do SINAN
-  cbo_map.py           mapeamento CBO das ocupações
-  paths.py             caminhos do projeto
-  models/              wrapper de XGBoost/LightGBM com tuning
-notebooks/
-  cleaning/            execução do tratamento
-  analysis/            análise exploratória
-  modeling/            treino e avaliação dos modelos
-data/
-  raw/parquet/         dados originais em Parquet
-  raw/csv/             dados originais em CSV
-  processed/           bases geradas pelo tratamento
-artifacts/models/      modelos treinados em Joblib
-docs/references/       documentos do SINAN (dicionário de dados)
-reports/figures/       gráficos gerados pela análise
-src/                   site em React + TypeScript (Vite)
-```
+O alvo é harmonizado por período:
 
-Os notebooks executam e mostram cada etapa. A parte de código que dá para
-reaproveitar fica em `dengue_pipeline/`.
+- 2014–2016: `{1, 2, 3, 4, 10, 11, 12} → 1` e `{5} → 0`;
+- 2017–2021: `{10, 11, 12} → 1` e `{5} → 0`;
+- `{0, 8, 9, vazio, inesperado}` → removido e auditado.
 
-## Dados
-
-Usamos os arquivos de dengue de 2017, 2018 e 2019, que somam mais ou menos 2,8
-milhões de notificações:
+## Estrutura principal
 
 ```text
-data/raw/parquet/DENGBR17.parquet
-data/raw/parquet/DENGBR18.parquet
-data/raw/parquet/DENGBR19.parquet
+data/dengue_manifest.json          snapshot oficial, hashes, esquema e contagens
+dengue_pipeline/cleaner.py         limpeza sem estado, orientada a chunks
+dengue_pipeline/features.py        esquema único de 105 features
+dengue_pipeline/datasets.py        carregamento das partições temporais
+dengue_pipeline/models/            MLP, XGBoost e LightGBM
+scripts/prepare_dengue_data.py     download, validação e ETL
+scripts/train_models.py            treino 2014–2019 e validação 2020
+scripts/evaluate_models.py         calibração 2020 e teste final 2021
+api.py                             FastAPI e simulação com casos de 2021
 ```
 
-As versões em CSV ficam em `data/raw/csv/`. O dicionário de dados do SINAN está em
-`docs/references/dicionario_dados_dengue.pdf`.
+Os ZIPs oficiais e Parquets derivados ficam fora do Git. O repositório versiona o manifesto, o relatório de auditoria, os modelos finais, suas métricas e o pool reduzido da simulação.
 
-## Tratamento de dados
+## Ambiente
 
-A classe `DengueDataCleaner` (em `dengue_pipeline/cleaner.py`) carrega os três
-anos, junta as limpezas que cada integrante fez e tem duas saídas:
-
-- `transformar_analise()`: dataframe mais legível, com os rótulos em texto (sexo,
-  raça, UF, escolaridade e por aí vai). É o que usamos na análise exploratória.
-- `transformar_ml()`: dataframe todo numérico, pronto para o modelo.
-
-No tratamento mais geral fazemos o seguinte:
-
-- renomeamos as colunas do SINAN para nomes mais fáceis de ler;
-- criamos os rótulos de sexo, raça, gestação, escolaridade, UF, ocupação (via
-  CBO) e classificação final;
-- criamos a coluna `days_to_notification` (data da notificação menos a data de
-  início dos sintomas);
-- removemos as colunas de encerramento, que dariam vazamento;
-- transformamos a classificação final em `0 = descartado` e `1 = confirmado`.
-
-Já no `transformar_ml`, as principais mudanças nas colunas são:
-
-- os 12 sintomas saem do código do SINAN (1/2/NaN) e viram binário 0/1;
-- criamos agregados de sintomas: `number_of_symptoms`,
-  `number_of_important_symptoms` e as interações entre pares de sintomas;
-- a sazonalidade (mês da notificação, mês de início dos sintomas e semana
-  epidemiológica) vira seno e cosseno, e a versão crua é descartada;
-- os encodings: one-hot para sexo e raça, ordinal para UF de residência,
-  escolaridade e ocupação, e a gravidez vira duas flags binárias;
-- o ano (`notification_year` e `symptom_epi_year`) fica de fora das features,
-  porque ele não ajuda a generalizar para anos novos.
-
-A base de ML fica salva em:
-
-```text
-data/processed/dengue_tratado_ml.parquet
-```
-
-## Evitando vazamento de dados
-
-Separamos as responsabilidades de propósito para não vazar informação do teste
-para o treino:
-
-- o `cleaner` só faz transformações que não dependem dos dados (one-hot,
-  binarização, seno/cosseno, mapeamentos fixos), então pode rodar no conjunto
-  inteiro sem problema;
-- o que depende de estatística dos dados, como imputar pela mediana, fica no
-  `Pipeline` da modelagem e é ajustado só no treino;
-- nenhuma coluna que só existe depois que o caso é encerrado entra no modelo.
-
-## Modelagem
-
-O notebook é o `notebooks/modeling/models.ipynb`. O conjunto atual usa três
-modelos: MLP, XGBoost e LightGBM. A `MLPDiseaseClassifier` adapta a rede neural
-do projeto original: embeddings para variáveis categóricas, BatchNorm e camadas
-densas 1024, 512, 256 e 128. O treinamento usa batches, validação interna e early
-stopping sem colocar o dataset inteiro na GPU.
-
-XGBoost e LightGBM passam pela classe `GradientBoostingDiseaseClassifier`, que
-ajusta os hiperparâmetros com o Optuna usando o PR-AUC (average precision) como
-métrica. Trocamos o recall por essa métrica porque otimizar só o recall acabava
-gerando um modelo que classificava quase tudo como positivo.
-
-Algumas decisões importantes:
-
-- Geografia: mantivemos a localização de residência (`residence_municipality`,
-  `residence_health_region` e a UF), que prevê bastante por causa da
-  endemicidade e não é vazamento. A geografia de notificação e o
-  `health_facility` (que tem dezenas de milhares de valores) ficaram de fora,
-  porque são mais administrativos e o modelo tende a decorar.
-- Validação no tempo: no split padrão treinamos com 2017, 2018 e o começo de
-  2019, e testamos no segundo semestre de 2019. Para um teste mais justo de
-  generalização dá para treinar em 2017 e 2018 e testar em 2019 inteiro (o que
-  chamamos de cross-year).
-- Limiar de decisão: o modelo devolve uma probabilidade, e o ponto de corte é uma
-  escolha nossa. Para vigilância, em que perder um caso real é pior que um alarme
-  falso, vale usar um limiar baixo. O método `evaluate` mostra precisão, recall e
-  F1 em vários limiares.
-- Desempenho: no recorte temporal o XGBoost fica perto de 0,82 de PR-AUC. Na
-  validação cross-year, testando num ano que ele nunca viu, cai para uns 0,68 de
-  ROC-AUC. Vale lembrar que o modelo se apoia bastante na geografia e na época do
-  ano, e que o próprio alvo depende em parte do critério da vigilância (em
-  epidemia, muito caso é confirmado pelo critério clínico-epidemiológico).
-
-Os modelos treinados ficam em `artifacts/models/` como `mlp.joblib`,
-`xgboost.joblib` e `lightgbm.joblib`. A MLP salva junto do modelo seus encoders,
-medianas, arquitetura e ordem das features. Os gráficos de importância ficam em
-`reports/figures/modeling/`.
-
-Depois de treinar os três modelos, execute
-`notebooks/modeling/model_evaluation.ipynb` para regenerar as métricas e figuras
-do conjunto atual. Resultados de modelos removidos não são mantidos.
-
-## Como rodar a limpeza
-
-Instalar as dependências:
+Requer Python 3.11 e Node.js.
 
 ```powershell
 py -3.11 -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+npm ci
 ```
 
-Em uma máquina Windows com GPU NVIDIA, instale a variante CUDA oficial do
-PyTorch depois das demais dependências:
+## Preparação dos dados
 
 ```powershell
-.\.venv\Scripts\python -m pip install --force-reinstall --no-deps torch==2.11.0 --index-url https://download.pytorch.org/whl/cu130
+python scripts/prepare_dengue_data.py
 ```
 
-Gerar a base de ML:
+O script baixa os oito ZIPs oficiais, exige os SHA-256 fixados, lê chunks de 100.000 linhas e grava um Parquet de análise e outro de ML por ano. Ele falha se cabeçalho, tamanho, hash, número de linhas, distribuição de `CLASSI_FIN`, esquema ou presença das duas classes divergir do manifesto.
+
+O relatório fica em `reports/data/dengue_data_audit.csv`. Há uma limitação real na fonte: 2014 não informa os sintomas selecionados, e 2015–2016 têm muitos sintomas ausentes. Ausência permanece `NaN`; `number_of_reported_symptoms` separa “não informado” de “não”.
+
+## Treinamento e avaliação
 
 ```powershell
-py -3.11 -c "from dengue_pipeline import DengueDataCleaner; df = DengueDataCleaner().transformar_ml(); print(df.shape)"
+python scripts/train_models.py --n-trials 200 --max-epochs 150 --tuning-sample-size 200000
+python scripts/evaluate_models.py --threshold-step 0.01
 ```
 
-Ou é só abrir os notebooks da pasta `notebooks/`.
+A MLP exige CUDA no treinamento e ajusta `OrdinalEncoder` e medianas somente em 2014–2019. XGBoost e LightGBM treinam em CPU e tratam `NaN` nativamente. Optuna usa amostras estratificadas e determinísticas de até 200 mil registros do treino e de 2020; o ajuste final usa todo o treino.
 
-## Análise exploratória
+O treino cria `artifacts/models/model_manifest.json`. A avaliação escolhe pesos e limiar em 2020, avalia 2021 uma única vez e cria `artifacts/models/ensemble_config.json`. A API valida versão do esquema, períodos, lista de features e hashes antes de aceitar os artefatos. Os modelos antigos ficam indisponíveis até o retreinamento completo.
 
-```text
-notebooks/analysis/analise_exploratoria_dengue.ipynb
-```
-
-Os gráficos ficam salvos em `reports/figures/`, que é a mesma pasta que a página
-de Panorama Epidemiológico do site usa.
-
-## Site
-
-Feito com React, TypeScript e Vite.
-
-Rotas:
-
-```text
-/          página inicial (descrição e simulação com os modelos)
-/triagem   formulário de triagem
-/graphics  Panorama Epidemiológico (gráficos da análise)
-```
-
-A triagem e a simulação chamam a API FastAPI em `api.py`, que usa os modelos
-treinados de `artifacts/models/`. O arquivo `ml_preprocess.joblib`, gerado pela
-primeira célula do notebook de modelagem, é obrigatório para aplicar os mesmos
-encoders usados no treino.
-
-### Como iniciar a API
+## API e frontend
 
 ```powershell
-.\.venv\Scripts\python -m uvicorn api:app --reload
-```
-
-A API fica em `http://localhost:8000`. O endpoint `/health` informa quais
-modelos e artefatos de pré-processamento foram carregados.
-
-Por padrão, a MLP usa CUDA quando o PyTorch a detecta e CPU nos demais casos.
-Para forçar o dispositivo na API, defina `MLP_DEVICE=cpu` ou `MLP_DEVICE=cuda`.
-
-### Como abrir o site
-
-```powershell
-npm install
+python -m uvicorn api:app --reload
 npm run dev
 ```
 
-O endereço costuma ser `http://localhost:5173`. Para gerar o build é
-`npm run build`. Para usar outra URL de API, defina `VITE_API_URL` no ambiente
-antes de iniciar o Vite.
+O contrato de `POST /predict` mantém os mesmos campos. Sintomas aceitam `0`, `1` ou ausência; campos ausentes viram `NaN`. `GET /health` informa a versão do esquema, os períodos e a compatibilidade dos artefatos. A simulação histórica usa exclusivamente casos rotulados de 2021.
 
-## Próximos passos
+## Validação
 
-- Tratar a geografia de alta cardinalidade com algum encoding por frequência ou
-  região (ajustado só no treino) em vez de simplesmente descartar.
-- Usar a validação cross-year como métrica principal de generalização.
-- Calibrar as probabilidades e definir o limiar de corte da triagem.
+```powershell
+python -m unittest discover -s tests -v
+npm run build
+```
+
+Os testes cobrem os dois mapeamentos do alvo, os esquemas de 2014/2019/2020/2021, igualdade de features entre pipeline e API, separação temporal, contagens oficiais e ausência da coluna removida. O ETL registra o pico de RSS por ano e deve permanecer abaixo de 16 GiB; o treino falha se atingir 28 GiB.

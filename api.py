@@ -4,14 +4,14 @@ API de predição de dengue.
 Rode com:
     .venv\Scripts\python -m uvicorn api:app --reload
 
-O pré-processamento aqui reproduz exatamente o transformar_ml do cleaner. Os
-encoders ajustados no treino (ocupação e UF) são carregados de
-artifacts/models/ml_preprocess.joblib, que é gerado pelo notebook de modelagem.
+Treino e inferência usam o mesmo construtor de features sem estado. Todo
+pré-processamento aprendido fica dentro do artefato de cada modelo e é ajustado
+somente nos anos de treino.
 """
 
-from calendar import monthrange
 from datetime import date
-from itertools import combinations
+import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -32,9 +32,20 @@ from pydantic import (
     model_validator,
 )
 
-from dengue_pipeline.paths import SIMULATION_POOL_PATH, SIMULATION_SOURCE_PARQUET
+from dengue_pipeline.features import (
+    FEATURE_SCHEMA_VERSION,
+    MODEL_FEATURE_COLUMNS,
+    SYMPTOM_COLUMNS,
+    build_model_features,
+)
+from dengue_pipeline.paths import (
+    ENSEMBLE_CONFIG_PATH,
+    EXPECTED_SPLIT_ROWS,
+    MODEL_MANIFEST_PATH,
+    SIMULATION_POOL_PATH,
+    SIMULATION_SOURCE_PARQUET,
+)
 from dengue_pipeline.sinan_mappings import (
-    COLUMN_RENAME_MAP,
     DENGUE_CLASSIFICATION_LABELS,
     EDUCATION_LABELS,
     PREGNANCY_LABELS,
@@ -42,8 +53,6 @@ from dengue_pipeline.sinan_mappings import (
     RACE_LABELS,
     UF_ABBR_LABELS,
     UF_LABELS,
-    add_sinan_cbo_labels,
-    standardize_columns,
 )
 from dengue_pipeline.cbo_map import CBO_MAP
 logger = logging.getLogger(__name__)
@@ -53,7 +62,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 MODELS_DIR = Path(__file__).parent / "artifacts" / "models"
-PREPROCESS_PATH = MODELS_DIR / "ml_preprocess.joblib"
 
 MODELOS_DISPONIVEIS = {
     "mlp":                 "mlp.joblib",
@@ -61,16 +69,92 @@ MODELOS_DISPONIVEIS = {
     "lightgbm":            "lightgbm.joblib",
 }
 
+
+def _load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        logger.exception("Não foi possível carregar %s", path)
+        return {}
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+model_manifest = _load_json(MODEL_MANIFEST_PATH)
+ensemble_config = _load_json(ENSEMBLE_CONFIG_PATH)
+try:
+    ENSEMBLE_WEIGHTS = {
+        str(name): float(weight)
+        for name, weight in ensemble_config.get("weights", {}).items()
+    }
+    ENSEMBLE_THRESHOLD = float(ensemble_config.get("threshold", 0.5))
+    ensemble_values_valid = (
+        set(ENSEMBLE_WEIGHTS) == set(MODELOS_DISPONIVEIS)
+        and all(
+            np.isfinite(weight) and weight > 0
+            for weight in ENSEMBLE_WEIGHTS.values()
+        )
+        and np.isfinite(ENSEMBLE_THRESHOLD)
+        and 0 <= ENSEMBLE_THRESHOLD <= 1
+    )
+except (AttributeError, TypeError, ValueError):
+    ENSEMBLE_WEIGHTS = {}
+    ENSEMBLE_THRESHOLD = 0.5
+    ensemble_values_valid = False
+
+model_manifest_compatible = (
+    model_manifest.get("feature_schema_version") == FEATURE_SCHEMA_VERSION
+    and model_manifest.get("feature_columns") == list(MODEL_FEATURE_COLUMNS)
+    and model_manifest.get("periods", {}).get("train")
+    == [2014, 2015, 2016, 2017, 2018, 2019]
+    and model_manifest.get("periods", {}).get("validation") == [2020]
+    and model_manifest.get("periods", {}).get("test") == [2021]
+    and model_manifest.get("row_counts") == EXPECTED_SPLIT_ROWS
+)
+ensemble_config_compatible = (
+    ensemble_config.get("feature_schema_version") == FEATURE_SCHEMA_VERSION
+    and ensemble_config.get("selection_period") == [2020]
+    and ensemble_config.get("test_period") == [2021]
+    and set(ensemble_config.get("weights", {})) == set(MODELOS_DISPONIVEIS)
+    and ensemble_values_valid
+    and MODEL_MANIFEST_PATH.exists()
+    and ensemble_config.get("model_manifest_sha256")
+    == _sha256_file(MODEL_MANIFEST_PATH)
+)
+artifact_set_compatible = (
+    model_manifest_compatible and ensemble_config_compatible
+)
+
 modelos = {}
 erros_carregamento = {}
 for nome, arquivo in MODELOS_DISPONIVEIS.items():
     caminho = MODELS_DIR / arquivo
+    if not artifact_set_compatible:
+        erros_carregamento[nome] = (
+            "manifesto ausente ou incompatível com o esquema de features "
+            f"{FEATURE_SCHEMA_VERSION}"
+        )
+        continue
     if not caminho.exists():
         erros_carregamento[nome] = f"arquivo não encontrado: {caminho}"
         logger.warning("Modelo %s não encontrado em %s", nome, caminho)
         continue
 
     try:
+        model_entry = model_manifest.get("models", {}).get(nome, {})
+        if model_entry.get("file") != arquivo:
+            raise ValueError("arquivo difere do manifesto do modelo")
+        if model_entry.get("sha256") != _sha256_file(caminho):
+            raise ValueError("SHA-256 difere do manifesto do modelo")
         modelo = joblib.load(caminho)
         if nome == "xgboost":
             modelo_interno = getattr(modelo, "model", None)
@@ -80,38 +164,19 @@ for nome, arquivo in MODELOS_DISPONIVEIS.items():
                 )
         elif nome == "mlp" and hasattr(modelo, "device"):
             modelo.device = os.getenv("MLP_DEVICE", "auto")
+        feature_names = list(
+            getattr(modelo, "feature_names", None)
+            or getattr(modelo, "feature_names_in_", [])
+        )
+        if feature_names != list(MODEL_FEATURE_COLUMNS):
+            raise ValueError(
+                "features do modelo diferem de MODEL_FEATURE_COLUMNS"
+            )
         modelos[nome] = modelo
         logger.info("Modelo %s carregado", nome)
     except Exception as exc:
         erros_carregamento[nome] = str(exc)
         logger.exception("Não foi possível carregar o modelo %s", nome)
-
-# Encoders ajustados no treino (mesmos objetos usados pelo cleaner).
-preprocess = {}
-if PREPROCESS_PATH.exists():
-    try:
-        preprocess = joblib.load(PREPROCESS_PATH)
-        logger.info("Pré-processamento carregado: %s", sorted(preprocess))
-    except Exception:
-        logger.exception("Não foi possível carregar %s", PREPROCESS_PATH)
-else:
-    logger.warning(
-        "Pré-processamento não encontrado em %s; rode o notebook de modelagem",
-        PREPROCESS_PATH,
-    )
-
-OCCUPATION_ENCODER = preprocess.get("occupation_encoder")
-RESIDENCE_STATE_ENCODER = preprocess.get("residence_state_encoder")
-DAYS_TO_NOTIFICATION_MEDIAN = preprocess.get("days_to_notification_median", 0.0)
-
-# Valores calculados pelo notebook model_evaluation.ipynb.
-# Cada peso é o recall do modelo dividido pela soma dos três recalls.
-ENSEMBLE_WEIGHTS = {
-    "mlp": 0.33245651147532945,
-    "xgboost": 0.3325592161335222,
-    "lightgbm": 0.33498427239114836,
-}
-ENSEMBLE_THRESHOLD = 0.08
 
 # ---------------------------------------------------------------------------
 # App
@@ -150,7 +215,7 @@ class DadosPaciente(BaseModel):
     education_level: int | None = Field(default=None, ge=0, le=10)
     occupation_code: str | None = Field(
         default=None,
-        pattern=r"^\d{5,6}$",
+        pattern=r"^(?:0|\d{5,6})$",
     )
 
     # Residência
@@ -174,18 +239,18 @@ class DadosPaciente(BaseModel):
     symptom_epi_week_number: int | None = Field(default=None, ge=1, le=53)
 
     # Sintomas (1 = sim, 0 = não)
-    fever: int = Field(default=0, ge=0, le=1)
-    myalgia: int = Field(default=0, ge=0, le=1)
-    headache: int = Field(default=0, ge=0, le=1)
-    rash: int = Field(default=0, ge=0, le=1)
-    vomiting: int = Field(default=0, ge=0, le=1)
-    nausea: int = Field(default=0, ge=0, le=1)
-    back_pain: int = Field(default=0, ge=0, le=1)
-    conjunctivitis: int = Field(default=0, ge=0, le=1)
-    arthritis: int = Field(default=0, ge=0, le=1)
-    joint_pain: int = Field(default=0, ge=0, le=1)
-    petechiae: int = Field(default=0, ge=0, le=1)
-    retro_orbital_pain: int = Field(default=0, ge=0, le=1)
+    fever: int | None = Field(default=None, ge=0, le=1)
+    myalgia: int | None = Field(default=None, ge=0, le=1)
+    headache: int | None = Field(default=None, ge=0, le=1)
+    rash: int | None = Field(default=None, ge=0, le=1)
+    vomiting: int | None = Field(default=None, ge=0, le=1)
+    nausea: int | None = Field(default=None, ge=0, le=1)
+    back_pain: int | None = Field(default=None, ge=0, le=1)
+    conjunctivitis: int | None = Field(default=None, ge=0, le=1)
+    arthritis: int | None = Field(default=None, ge=0, le=1)
+    joint_pain: int | None = Field(default=None, ge=0, le=1)
+    petechiae: int | None = Field(default=None, ge=0, le=1)
+    retro_orbital_pain: int | None = Field(default=None, ge=0, le=1)
 
     # Hospitalização
     hospitalized: Literal[1, 2, 9] | None = None
@@ -225,33 +290,18 @@ class SimulacaoRandomRequest(BaseModel):
 # Pré-processamento — replica o transformar_ml() do cleaner
 # ---------------------------------------------------------------------------
 
-SINTOMAS = [
-    "fever", "myalgia", "headache", "rash", "vomiting", "nausea",
-    "back_pain", "conjunctivitis", "arthritis", "joint_pain",
-    "petechiae", "retro_orbital_pain",
-]
+SINTOMAS = list(SYMPTOM_COLUMNS)
 
 # Código SINAN da escolaridade (0-10) -> ordinal usado no treino.
 # Vem da composição EDUCATION_LABELS (código -> texto) com o map_escolaridade do
 # cleaner (texto -> 0..5). Ex.: 0 = Analfabeto -> 1; 9/10 = Ignorado/NA -> 0.
-MAP_ESCOLARIDADE = {0: 1, 1: 2, 2: 2, 3: 2, 4: 3, 5: 4, 6: 4, 7: 5, 8: 5, 9: 0, 10: 0}
-
-MAP_SEXO_LABEL = {"M": "Masculino", "F": "Feminino", "I": "Ignorado"}
-
-RACE_CODES = [1, 2, 3, 4, 5, 9]
-
-SIMULATION_YEAR = 2019
-SIMULATION_NOTIFICATION_MONTH_MIN = 6
+SIMULATION_YEAR = 2021
+SIMULATION_NOTIFICATION_MONTH_MIN = 1
 SIMULATION_VALID_CLASSIFICATIONS = frozenset(DENGUE_CLASSIFICATION_LABELS)
 MAX_SAMPLE_ATTEMPTS = 10
 
 SIMULATION_SOURCE_COLUMNS = (
-    "notification_date",
-    "notification_year",
-    "notification_epi_week",
-    "symptom_onset_date",
-    "symptom_epi_week",
-    "age",
+    "age_years",
     "sex",
     "pregnancy_status",
     "race",
@@ -260,9 +310,16 @@ SIMULATION_SOURCE_COLUMNS = (
     "residence_state",
     "residence_municipality",
     "residence_health_region",
+    "notification_date",
+    "notification_year",
+    "notification_epi_week",
     "notif_municipality",
     "notif_health_region",
     "health_facility",
+    "symptom_onset_date",
+    "days_to_notification",
+    "symptom_epi_year",
+    "symptom_epi_week_number",
     "fever",
     "myalgia",
     "headache",
@@ -277,7 +334,7 @@ SIMULATION_SOURCE_COLUMNS = (
     "retro_orbital_pain",
     "hospitalized",
     "hospital_state",
-    "final_classification",
+    "final_classification_code",
 )
 SIMULATION_DERIVED_COLUMNS = (
     "occupation_name",
@@ -307,144 +364,9 @@ _simulation_pool: pd.DataFrame | None = None
 _simulation_pool_lock = Lock()
 
 
-def _encodar_ordinal(encoder, valor, coluna, como_int64: bool):
-    """Aplica um OrdinalEncoder ajustado no treino a um único valor, do mesmo
-    jeito que o cleaner faz: desconhecido/ausente vira 0."""
-    if encoder is None:
-        return 0
-    serie = pd.DataFrame({coluna: [valor]})
-    if como_int64:
-        serie = serie.astype("Int64").astype("string")
-    else:
-        serie = serie.astype("string").replace("0", pd.NA)
-    serie = serie.astype(object).where(serie.notna(), np.nan)
-    encoded = encoder.transform(serie) + 1
-    valor_enc = encoded[0][0]
-    return 0 if pd.isna(valor_enc) else int(valor_enc)
-
-
 def construir_features(dados: DadosPaciente) -> pd.DataFrame:
-    """Transforma os dados do formulário no vetor de features do modelo,
-    reproduzindo o transformar_ml()."""
-
-    row: dict = {}
-
-    # --- idade ---
-    row["age_years"] = dados.age_years
-
-    # --- sexo (one-hot) ---
-    sexo_label = MAP_SEXO_LABEL.get(dados.sex or "", "Ignorado")
-    row["sex_Female"] = int(sexo_label == "Feminino")
-    row["sex_Male"] = int(sexo_label == "Masculino")
-    row["sex_Ignored"] = int(sexo_label == "Ignorado")
-
-    # --- raça (one-hot, inclui o código 9 = Ignorado) ---
-    for cod in RACE_CODES:
-        row[f"race_{cod}"] = int((dados.race or 0) == cod)
-
-    # --- escolaridade (ordinal) ---
-    row["education_level"] = MAP_ESCOLARIDADE.get(dados.education_level, 0)
-
-    # --- ocupação e UF: encoders ajustados no treino ---
-    row["occupation_code"] = _encodar_ordinal(
-        OCCUPATION_ENCODER, dados.occupation_code, "occupation_code", como_int64=False
-    )
-    row["residence_state"] = _encodar_ordinal(
-        RESIDENCE_STATE_ENCODER, dados.residence_state, "residence_state", como_int64=True
-    )
-
-    # --- demais geográficos / administrativos (crus, como no transformar_ml) ---
-    row["residence_municipality"] = dados.residence_municipality or 0
-    row["residence_health_region"] = dados.residence_health_region or 0
-    ano_notif = (
-        dados.notification_year
-        or (dados.notification_date.year if dados.notification_date else None)
-    )
-    row["notification_year"] = ano_notif or 0
-    row["notif_municipality"] = dados.notif_municipality or 0
-    row["notif_health_region"] = dados.notif_health_region or 0
-    row["health_facility"] = dados.health_facility or 0
-
-    # --- sazonalidade cíclica ---
-    mes_notif = (
-        dados.notification_month
-        or (dados.notification_date.month if dados.notification_date else None)
-    )
-    mes_notif_num = mes_notif if mes_notif is not None else np.nan
-    row["notification_month"] = mes_notif_num
-    row["notification_month_sin"] = np.sin(
-        2 * np.pi * mes_notif_num / 12
-    )
-    row["notification_month_cos"] = np.cos(
-        2 * np.pi * mes_notif_num / 12
-    )
-
-    semana = (
-        dados.symptom_epi_week_number
-        or (
-            dados.symptom_onset_date.isocalendar().week
-            if dados.symptom_onset_date
-            else None
-        )
-    )
-    semana_num = semana if semana is not None else np.nan
-    row["symptom_epi_week_number"] = semana_num
-    row["symptom_epi_week_number_sin"] = np.sin(
-        2 * np.pi * semana_num / 53
-    )
-    row["symptom_epi_week_number_cos"] = np.cos(
-        2 * np.pi * semana_num / 53
-    )
-
-    if dados.symptom_onset_date:
-        mes_sint = dados.symptom_onset_date.month
-        row["symptom_month"] = mes_sint
-        row["symptom_day"] = dados.symptom_onset_date.day
-        row["symptom_month_end"] = int(
-            dados.symptom_onset_date.day
-            == monthrange(
-                dados.symptom_onset_date.year,
-                dados.symptom_onset_date.month,
-            )[1]
-        )
-    else:
-        mes_sint = np.nan
-        row["symptom_month"] = np.nan
-        row["symptom_day"] = np.nan
-        row["symptom_month_end"] = 0
-    row["symptom_month_sin"] = np.sin(2 * np.pi * mes_sint / 12)
-    row["symptom_month_cos"] = np.cos(2 * np.pi * mes_sint / 12)
-
-    # --- dias até notificação: mesma regra do cleaner (mediana p/ ausente, clip 0-90) ---
-    dias = dados.days_to_notification
-    if (
-        dias is None
-        and dados.notification_date
-        and dados.symptom_onset_date
-    ):
-        dias = (dados.notification_date - dados.symptom_onset_date).days
-    if dias is None:
-        dias = DAYS_TO_NOTIFICATION_MEDIAN
-    row["days_to_notification"] = float(np.clip(dias, 0, 90))
-
-    # --- sintomas (binários vindos do frontend) ---
-    for s in SINTOMAS:
-        row[s] = int(getattr(dados, s, 0) == 1)
-
-    # --- interações entre sintomas ---
-    for s_a, s_b in combinations(SINTOMAS, 2):
-        row[f"{s_a}_and_{s_b}"] = row[s_a] * row[s_b]
-
-    # --- agregados de sintomas ---
-    row["number_of_symptoms"] = sum(row[s] for s in SINTOMAS)
-    row["number_of_important_symptoms"] = row["rash"] + row["retro_orbital_pain"]
-
-    # --- gravidez ---
-    row["pregnancy"] = int(dados.pregnancy_status in [1, 2, 3, 4])
-    row["pregnancy_informed"] = int(dados.pregnancy_status in [1, 2, 3, 4, 5])
-
-    df = pd.DataFrame([row])
-    return df.select_dtypes(include=["number"]).astype("float32")
+    """Build one inference row with the shared training feature schema."""
+    return build_model_features(pd.DataFrame([dados.model_dump()]))
 
 
 def _colunas_esperadas(modelo):
@@ -612,27 +534,31 @@ def _to_date(value: Any) -> date | None:
 
 def _to_occupation_code(value: Any) -> str | None:
     code = _to_int(value)
-    if code is None or code <= 0:
+    if code is None or code < 0:
         return None
     code_text = str(code)
-    return code_text if len(code_text) in (5, 6) else None
+    return code_text if code == 0 or len(code_text) in (5, 6) else None
 
 
-def _flag_from_sinan(value: Any) -> int:
-    return int(_to_int(value) == 1)
+def _flag_from_sinan(value: Any) -> int | None:
+    parsed = _to_int(value)
+    if parsed == 1:
+        return 1
+    if parsed in {0, 2}:
+        return 0
+    return None
 
 
 def _build_patient_from_sample(row: pd.Series) -> DadosPaciente:
     notification_date = _to_date(row.get("notification_date"))
     symptom_onset_date = _to_date(row.get("symptom_onset_date"))
 
-    symptom_epi_week_raw = _to_int(row.get("symptom_epi_week"))
-    symptom_epi_week_number = None
-    if symptom_epi_week_raw is not None:
-        symptom_epi_week_number = symptom_epi_week_raw % 100
-
     return DadosPaciente(
-        age_years=_parse_age_years(row.get("age")),
+        age_years=(
+            float(row.get("age_years"))
+            if pd.notna(row.get("age_years"))
+            else None
+        ),
         sex=row.get("sex") if row.get("sex") in {"M", "F", "I"} else None,
         pregnancy_status=_one_of(row.get("pregnancy_status"), {1, 2, 3, 4, 5, 6, 9}),
         race=_one_of(row.get("race"), {1, 2, 3, 4, 5, 9}),
@@ -650,8 +576,10 @@ def _build_patient_from_sample(row: pd.Series) -> DadosPaciente:
         health_facility=_to_int(row.get("health_facility")),
         symptom_onset_date=symptom_onset_date,
         days_to_notification=_to_int(row.get("days_to_notification")),
-        symptom_epi_year=(symptom_onset_date.year if symptom_onset_date else None),
-        symptom_epi_week_number=symptom_epi_week_number,
+        symptom_epi_year=_to_int(row.get("symptom_epi_year")),
+        symptom_epi_week_number=_to_int(
+            row.get("symptom_epi_week_number")
+        ),
         fever=_flag_from_sinan(row.get("fever")),
         myalgia=_flag_from_sinan(row.get("myalgia")),
         headache=_flag_from_sinan(row.get("headache")),
@@ -699,7 +627,7 @@ def _simulation_pool_is_valid(pool: pd.DataFrame) -> bool:
     dates = pd.to_datetime(pool["notification_date"], errors="coerce")
     years = pd.to_numeric(pool["notification_year"], errors="coerce")
     classifications = pd.to_numeric(
-        pool["final_classification"],
+        pool["final_classification_code"],
         errors="coerce",
     )
 
@@ -713,82 +641,52 @@ def _simulation_pool_is_valid(pool: pd.DataFrame) -> bool:
 
 
 def _build_simulation_pool() -> pd.DataFrame:
+    """Build the public simulation pool from the untouched 2021 test set."""
     if not SIMULATION_SOURCE_PARQUET.exists():
         raise HTTPException(
             status_code=503,
-            detail=f"Base da simulacao nao encontrada: {SIMULATION_SOURCE_PARQUET}",
+            detail=(
+                "Base processada de 2021 não encontrada: "
+                f"{SIMULATION_SOURCE_PARQUET}"
+            ),
         )
-
-    reverse_columns = {
-        standardized: raw
-        for raw, standardized in COLUMN_RENAME_MAP.items()
-    }
-    missing_mappings = [
-        column
-        for column in SIMULATION_SOURCE_COLUMNS
-        if column not in reverse_columns
-    ]
-    if missing_mappings:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "Colunas da simulacao sem mapeamento SINAN",
-                "missing": missing_mappings,
-            },
-        )
-
-    raw_columns = [
-        reverse_columns[column]
-        for column in SIMULATION_SOURCE_COLUMNS
-    ]
 
     try:
-        raw_df = pd.read_parquet(
+        source = pd.read_parquet(
             SIMULATION_SOURCE_PARQUET,
-            columns=raw_columns,
+            columns=list(SIMULATION_POOL_COLUMNS),
         )
-        df = standardize_columns(raw_df)
-
-        dates = pd.to_datetime(df["notification_date"], errors="coerce")
-        years = pd.to_numeric(df["notification_year"], errors="coerce")
+        dates = pd.to_datetime(source["notification_date"], errors="coerce")
+        years = pd.to_numeric(
+            source["notification_year"],
+            errors="coerce",
+        )
         classifications = pd.to_numeric(
-            df["final_classification"],
+            source["final_classification_code"],
             errors="coerce",
         )
         eligible = (
-            (years == SIMULATION_YEAR)
-            & (dates.dt.month >= SIMULATION_NOTIFICATION_MONTH_MIN)
+            years.eq(SIMULATION_YEAR)
+            & dates.dt.month.ge(SIMULATION_NOTIFICATION_MONTH_MIN)
             & classifications.isin(SIMULATION_VALID_CLASSIFICATIONS)
         )
-
-        filtered = df.loc[eligible].copy()
-        filtered["notification_year"] = years.loc[eligible].astype("int16")
-        filtered["final_classification"] = classifications.loc[
-            eligible
-        ].astype("int8")
-        filtered = add_sinan_cbo_labels(filtered)
-        filtered = filtered.loc[:, list(SIMULATION_POOL_COLUMNS)].reset_index(
-            drop=True
-        )
-
+        filtered = source.loc[
+            eligible,
+            list(SIMULATION_POOL_COLUMNS),
+        ].reset_index(drop=True)
         if not _simulation_pool_is_valid(filtered):
-            raise ValueError("pool reduzido da simulacao ficou invalido")
+            raise ValueError("pool reduzido da simulação ficou inválido")
 
         SIMULATION_POOL_PATH.parent.mkdir(parents=True, exist_ok=True)
         filtered.to_parquet(SIMULATION_POOL_PATH, index=False)
-        logger.info(
-            "Pool da simulacao gerado em %s com %s registros",
-            SIMULATION_POOL_PATH,
-            len(filtered),
-        )
         return filtered
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Nao foi possivel gerar o pool da simulacao")
+        logger.exception("Não foi possível gerar o pool da simulação")
         raise HTTPException(
             status_code=503,
-            detail="Nao foi possivel preparar a base historica da simulacao",
+            detail="Não foi possível preparar a base histórica da simulação",
         ) from exc
 
 
@@ -843,7 +741,9 @@ def escolher_caso_real_simulacao(seed: int | None = None) -> dict[str, Any]:
         row = pool.iloc[sampled_idx]
 
         try:
-            classification = _to_int(row.get("final_classification"))
+            classification = _to_int(
+                row.get("final_classification_code")
+            )
             observed = DENGUE_CLASSIFICATION_LABELS.get(classification)
             if observed is None:
                 raise ValueError("classificacao observada invalida")
@@ -880,23 +780,22 @@ def health():
     faltantes = [
         nome for nome in MODELOS_DISPONIVEIS if nome not in modelos
     ]
-    preprocess_pronto = all(
-        [
-            OCCUPATION_ENCODER is not None,
-            RESIDENCE_STATE_ENCODER is not None,
-            "days_to_notification_median" in preprocess,
-        ]
+    ensemble_ready = (
+        set(ENSEMBLE_WEIGHTS) == set(MODELOS_DISPONIVEIS)
+        and 0 <= ENSEMBLE_THRESHOLD <= 1
     )
     return {
         "status": (
             "ok"
-            if not faltantes and preprocess_pronto
+            if not faltantes and artifact_set_compatible and ensemble_ready
             else "degraded"
         ),
         "modelos_carregados": list(modelos.keys()),
         "modelos_ausentes": faltantes,
         "erros_carregamento": erros_carregamento,
-        "preprocess_carregado": preprocess_pronto,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "artefatos_compativeis": artifact_set_compatible,
+        "periodos": model_manifest.get("periods", {}),
         "ensemble_threshold": ENSEMBLE_THRESHOLD,
         "ensemble_weights": ENSEMBLE_WEIGHTS,
     }
@@ -909,15 +808,6 @@ def predict(dados: DadosPaciente):
             status_code=503,
             detail="Nenhum modelo foi carregado",
         )
-    if OCCUPATION_ENCODER is None or RESIDENCE_STATE_ENCODER is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Pré-processamento indisponível. Gere "
-                "artifacts/models/ml_preprocess.joblib no notebook de modelagem."
-            ),
-        )
-
     df = construir_features(dados)
 
     return _inferir_modelos(df)
@@ -930,15 +820,6 @@ def simulation_random(payload: SimulacaoRandomRequest | None = None):
             status_code=503,
             detail="Nenhum modelo foi carregado",
         )
-    if OCCUPATION_ENCODER is None or RESIDENCE_STATE_ENCODER is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Pré-processamento indisponível. Gere "
-                "artifacts/models/ml_preprocess.joblib no notebook de modelagem."
-            ),
-        )
-
     ausentes = [nome for nome in MODELOS_DISPONIVEIS if nome not in modelos]
     if ausentes:
         raise HTTPException(

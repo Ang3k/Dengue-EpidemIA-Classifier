@@ -13,13 +13,13 @@ precisa de novos endpoints.
 
 | Método | Endpoint | Estado | Finalidade |
 |---|---|---|---|
-| `GET` | `/health` | Implementado | Verifica os modelos e o pré-processamento |
+| `GET` | `/health` | Implementado | Verifica esquema, períodos, modelos e configuração do ensemble |
 | `POST` | `/predict` | Implementado | Executa a predição de uma triagem |
-| `POST` | `/api/v1/simulations/random` | Pendente | Seleciona um caso real do conjunto de teste e executa a predição |
-| `GET` | `/api/v1/triage/options` | Pendente | Retorna as opções gerais do formulário |
-| `GET` | `/api/v1/references/occupations` | Pendente | Pesquisa ocupações e códigos CBO |
-| `GET` | `/api/v1/references/municipalities` | Pendente | Pesquisa municípios por nome |
-| `GET` | `/api/v1/references/health-regions` | Pendente | Retorna a região de saúde de um município |
+| `POST` | `/api/v1/simulations/random` | Implementado | Seleciona um caso real de 2021 e executa a predição |
+| `GET` | `/api/v1/triage/options` | Implementado | Retorna as opções gerais do formulário |
+| `GET` | `/api/v1/references/occupations` | Implementado | Pesquisa ocupações e códigos CBO |
+| `GET` | `/api/v1/references/municipalities` | Implementado | Pesquisa municípios por nome |
+| `GET` | `/api/v1/references/health-regions` | Implementado | Retorna a região de saúde de um município |
 
 ## Divisão entre duas pessoas
 
@@ -34,7 +34,7 @@ POST /api/v1/simulations/random
 Responsabilidades:
 
 - selecionar um caso real e anonimizado do conjunto de teste;
-- usar somente registros de 2019 com mês de notificação maior ou igual a junho;
+- usar somente casos rotulados do conjunto final de 2021;
 - executar MLP, XGBoost e LightGBM;
 - retornar dados gerais, classificação observada e probabilidades;
 - alterar o simulador da Home;
@@ -90,12 +90,12 @@ O backend deve:
 1. selecionar aleatoriamente um registro em que:
 
    ```text
-   notification_year == 2019
-   notification_month >= 6
+   notification_year == 2021
+   final_classification_code in {5, 10, 11, 12}
    ```
 
 2. remover identificadores e campos desnecessários;
-3. executar o mesmo pré-processamento usado no treinamento;
+3. executar `build_model_features()`, a mesma função sem estado usada no treinamento;
 4. executar MLP, XGBoost e LightGBM;
 5. retornar os dados gerais, a classificação observada e as probabilidades.
 

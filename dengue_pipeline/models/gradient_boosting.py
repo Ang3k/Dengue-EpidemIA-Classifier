@@ -7,12 +7,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import pandas as pd
-from sklearn.metrics import f1_score, precision_score, recall_score
-from sklearn.model_selection import (
-    StratifiedKFold,
-    cross_val_score,
-    train_test_split,
+from sklearn.metrics import (
+    average_precision_score,
+    f1_score,
+    precision_score,
+    recall_score,
 )
+from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
 
@@ -89,13 +90,14 @@ class GradientBoostingDiseaseClassifier:
         defaults.update(params)
         return XGBClassifier(**defaults)
 
-    def _optimize(self, X, y, n_trials: int):
-        cross_validation = StratifiedKFold(
-            n_splits=2,
-            shuffle=True,
-            random_state=self.random_state,
-        )
-
+    def _optimize(
+        self,
+        X,
+        y,
+        X_validation,
+        y_validation,
+        n_trials: int,
+    ):
         def objective(trial):
             params = {
                 "n_estimators": trial.suggest_int(
@@ -154,16 +156,20 @@ class GradientBoostingDiseaseClassifier:
                 )
 
             model = self._build_model(params)
-            return cross_val_score(
+            self._fit_with_validation(
                 model,
                 X,
                 y,
-                cv=cross_validation,
-                scoring=self.tuning_metric,
-                n_jobs=1,
-            ).mean()
+                X_validation,
+                y_validation,
+            )
+            probabilities = model.predict_proba(X_validation)[:, 1]
+            return average_precision_score(y_validation, probabilities)
 
-        study = optuna.create_study(direction="maximize")
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=self.random_state),
+        )
         study.optimize(
             objective,
             n_trials=n_trials,
@@ -181,26 +187,77 @@ class GradientBoostingDiseaseClassifier:
         self,
         X_train,
         y_train,
+        X_validation=None,
+        y_validation=None,
         n_trials: int = 10,
         tuning_sample_size: int | None = 100_000,
+        tuning_validation_size: int | None = 200_000,
     ):
         X_train = self._prepare_features(X_train, fit=True)
         y_train = self._prepare_target(y_train)
 
         if not self.fast_train:
+            if X_validation is None or y_validation is None:
+                raise ValueError(
+                    "Temporal validation data is required when "
+                    "fast_train=False"
+                )
+            X_validation = self._prepare_features(X_validation)
+            y_validation = self._prepare_target(y_validation)
             X_tune, y_tune = self._sample_for_tuning(
                 X_train,
                 y_train,
                 tuning_sample_size,
             )
+            X_validation_tune, y_validation_tune = self._sample_for_tuning(
+                X_validation,
+                y_validation,
+                tuning_validation_size,
+            )
             self.model = self._optimize(
                 X_tune,
                 y_tune,
+                X_validation_tune,
+                y_validation_tune,
                 n_trials=n_trials,
             )
 
-        self.model.fit(X_train, y_train)
+        if self.fast_train:
+            self.model.fit(X_train, y_train)
+        else:
+            self._fit_with_validation(
+                self.model,
+                X_train,
+                y_train,
+                X_validation,
+                y_validation,
+            )
         return self
+
+    def _fit_with_validation(
+        self,
+        model,
+        X_train,
+        y_train,
+        X_validation,
+        y_validation,
+    ) -> None:
+        if self.model_type == "lgbm":
+            model.fit(
+                X_train,
+                y_train,
+                eval_set=[(X_validation, y_validation)],
+                callbacks=[lgb.early_stopping(50, verbose=False)],
+            )
+            return
+
+        model.set_params(early_stopping_rounds=50)
+        model.fit(
+            X_train,
+            y_train,
+            eval_set=[(X_validation, y_validation)],
+            verbose=False,
+        )
 
     def predict(self, X):
         self._ensure_fitted()

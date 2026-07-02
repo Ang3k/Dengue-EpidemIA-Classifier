@@ -133,22 +133,45 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
         self.best_epoch_: int | None = None
         self.history_: list[dict[str, float]] = []
 
-    def fit(self, X, y):
+    def fit(
+        self,
+        X,
+        y,
+        X_validation=None,
+        y_validation=None,
+    ):
         frame = self._prepare_frame(X, fit=True)
         target = self._prepare_target(y)
         self._validate_training_data(frame, target)
         self._seed_everything()
 
-        indices = np.arange(len(frame))
-        train_indices, validation_indices = train_test_split(
-            indices,
-            test_size=self.validation_size,
-            stratify=target,
-            random_state=self.random_state,
-        )
+        if (X_validation is None) != (y_validation is None):
+            raise ValueError(
+                "X_validation and y_validation must be provided together"
+            )
 
-        training_frame = frame.iloc[train_indices]
-        validation_frame = frame.iloc[validation_indices]
+        if X_validation is None:
+            indices = np.arange(len(frame))
+            train_indices, validation_indices = train_test_split(
+                indices,
+                test_size=self.validation_size,
+                stratify=target,
+                random_state=self.random_state,
+            )
+            training_frame = frame.iloc[train_indices]
+            training_target = target[train_indices]
+            validation_frame = frame.iloc[validation_indices]
+            validation_target = target[validation_indices]
+        else:
+            training_frame = frame
+            training_target = target
+            validation_frame = self._prepare_validation_frame(X_validation)
+            validation_target = self._prepare_target(y_validation)
+            self._validate_validation_data(
+                validation_frame,
+                validation_target,
+            )
+
         self._fit_preprocessor(training_frame)
 
         train_categorical, train_numerical = self._transform_features(
@@ -161,21 +184,21 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
         training_loader = self._make_loader(
             train_categorical,
             train_numerical,
-            target[train_indices],
+            training_target,
             shuffle=True,
         )
         validation_loader = self._make_loader(
             validation_categorical,
             validation_numerical,
-            target[validation_indices],
+            validation_target,
             shuffle=False,
         )
 
         runtime_device = self._resolve_device()
         self.model = self._build_network(runtime_device)
 
-        positive_count = int(target[train_indices].sum())
-        negative_count = len(train_indices) - positive_count
+        positive_count = int(training_target.sum())
+        negative_count = len(training_target) - positive_count
         positive_weight = negative_count / max(positive_count, 1)
         criterion = nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor(
@@ -410,6 +433,18 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
             raise ValueError(f"Features ausentes para a MLP: {missing}")
         return frame[self.feature_names]
 
+    def _prepare_validation_frame(self, X) -> pd.DataFrame:
+        if isinstance(X, pd.DataFrame):
+            frame = X.copy()
+        else:
+            frame = pd.DataFrame(X, columns=self.feature_names)
+        missing = sorted(set(self.feature_names) - set(frame.columns))
+        if missing:
+            raise ValueError(
+                f"Validation features missing for the MLP: {missing}"
+            )
+        return frame[self.feature_names]
+
     @staticmethod
     def _prepare_target(y) -> np.ndarray:
         target = np.asarray(y).reshape(-1)
@@ -438,6 +473,23 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
         if unavailable:
             raise ValueError(
                 f"Features categóricas ausentes para a MLP: {unavailable}"
+            )
+
+    def _validate_validation_data(
+        self,
+        frame: pd.DataFrame,
+        target: np.ndarray,
+    ) -> None:
+        if len(frame) != len(target):
+            raise ValueError(
+                "Validation X and y have different row counts"
+            )
+        if len(frame) == 0:
+            raise ValueError("Temporal validation data cannot be empty")
+        classes = set(np.unique(target))
+        if not classes.issubset({0, 1}):
+            raise ValueError(
+                f"Validation target must contain only 0 and 1: {classes}"
             )
 
     def _fit_preprocessor(self, frame: pd.DataFrame) -> None:

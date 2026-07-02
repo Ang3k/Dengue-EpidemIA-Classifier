@@ -27,7 +27,7 @@ function Home() {
           </p>
           <p>
             Já a página de <strong>Panorama Epidemiológico</strong> reúne os
-            gráficos e as descobertas da nossa análise dos casos de 2017 a 2019,
+            gráficos históricos da análise original de 2017 a 2019,
             como a sazonalidade, os sintomas mais discriminantes e os perfis por
             sexo e ocupação.
           </p>
@@ -44,9 +44,9 @@ function Home() {
         <div className="home-section">
           <h2>Sobre os dados</h2>
           <p>
-            As análises e o modelo usam registros oficiais de dengue notificados
-            no Brasil pelo SINAN em <strong>2017, 2018 e 2019</strong>, mais ou
-            menos 2,8 milhões de notificações. Cada registro traz sintomas, dados
+            O modelo usa registros oficiais de dengue notificados no Brasil pelo
+            SINAN entre <strong>2014 e 2021</strong>: 11,4 milhões de notificações
+            brutas e quase 10 milhões de casos rotulados. Cada registro traz sintomas, dados
             demográficos (idade, sexo, raça/cor, escolaridade, ocupação), a
             localização de residência e as datas de notificação e de início dos
             sintomas. O que o modelo aprende a prever é a classificação final de
