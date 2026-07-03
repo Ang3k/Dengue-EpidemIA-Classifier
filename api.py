@@ -9,7 +9,7 @@ pré-processamento aprendido fica dentro do artefato de cada modelo e é ajustad
 somente nos anos de treino.
 """
 
-from datetime import date
+from datetime import date, timedelta
 import hashlib
 import json
 import logging
@@ -37,13 +37,20 @@ from dengue_pipeline.features import (
     MODEL_FEATURE_COLUMNS,
     SYMPTOM_COLUMNS,
     build_model_features,
+    compute_local_density,
+    compute_local_positivity,
 )
 from dengue_pipeline.paths import (
     ENSEMBLE_CONFIG_PATH,
     EXPECTED_SPLIT_ROWS,
+    LOCAL_DENSITY_LOOKUP_PATH,
+    LOCAL_POSITIVITY_LOOKUP_PATH,
     MODEL_MANIFEST_PATH,
     SIMULATION_POOL_PATH,
     SIMULATION_SOURCE_PARQUET,
+    TEST_YEARS,
+    TRAIN_YEARS,
+    VALIDATION_YEARS,
 )
 from dengue_pipeline.sinan_mappings import (
     DENGUE_CLASSIFICATION_LABELS,
@@ -114,10 +121,10 @@ except (AttributeError, TypeError, ValueError):
 model_manifest_compatible = (
     model_manifest.get("feature_schema_version") == FEATURE_SCHEMA_VERSION
     and model_manifest.get("feature_columns") == list(MODEL_FEATURE_COLUMNS)
-    and model_manifest.get("periods", {}).get("train")
-    == [2014, 2015, 2016, 2017, 2018, 2019]
-    and model_manifest.get("periods", {}).get("validation") == [2020]
-    and model_manifest.get("periods", {}).get("test") == [2021]
+    and model_manifest.get("periods", {}).get("train") == list(TRAIN_YEARS)
+    and model_manifest.get("periods", {}).get("validation")
+    == list(VALIDATION_YEARS)
+    and model_manifest.get("periods", {}).get("test") == list(TEST_YEARS)
     and model_manifest.get("row_counts") == EXPECTED_SPLIT_ROWS
 )
 ensemble_config_compatible = (
@@ -204,6 +211,23 @@ app.add_middleware(
 # Schema de entrada — campos que o frontend já envia
 # ---------------------------------------------------------------------------
 
+def _semana_epidemiologica(dia: date) -> int:
+    """Semana epidemiológica (convenção MMWR/SINAN: semana começa no domingo,
+    a semana 1 é a que contém a maioria — a quarta-feira — no ano novo).
+
+    Validado contra o SINAN real (100% de concordância). Necessário porque a
+    densidade/positividade locais dependem da semana da notificação, e o
+    frontend envia a data, não a semana.
+    """
+    wday = (dia.weekday() + 1) % 7  # domingo = 0
+    quarta = dia + timedelta(days=(3 - wday))  # quarta-feira da semana epi
+    ano = quarta.year
+    jan1 = date(ano, 1, 1)
+    jan1_wday = (jan1.weekday() + 1) % 7
+    primeira_quarta = jan1 + timedelta(days=(3 - jan1_wday) % 7)
+    return (quarta - primeira_quarta).days // 7 + 1
+
+
 class DadosPaciente(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -279,6 +303,19 @@ class DadosPaciente(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def derivar_semana_epi(self):
+        # A semana da notificação alimenta o lookup de densidade/positividade
+        # local. Se o cliente não a enviou mas mandou a data, deriva-a — senão
+        # as duas features mais fortes do modelo ficariam NaN.
+        if self.notification_epi_week is None and self.notification_date is not None:
+            self.notification_epi_week = _semana_epidemiologica(
+                self.notification_date
+            )
+        if self.notification_year is None and self.notification_date is not None:
+            self.notification_year = self.notification_date.year
+        return self
+
 
 class SimulacaoRandomRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -340,9 +377,16 @@ SIMULATION_DERIVED_COLUMNS = (
     "occupation_name",
     "final_classification_label",
 )
+# Features de contexto epidemiológico calculadas sobre 2021 e guardadas no pool,
+# para a simulação usar o valor EXATO que o modelo viu no teste (não o lookup).
+SIMULATION_CONTEXT_COLUMNS = (
+    "local_density",
+    "local_positivity",
+)
 SIMULATION_POOL_COLUMNS = (
     *SIMULATION_SOURCE_COLUMNS,
     *SIMULATION_DERIVED_COLUMNS,
+    *SIMULATION_CONTEXT_COLUMNS,
 )
 
 SIMULATION_SYMPTOM_LABELS = {
@@ -364,9 +408,65 @@ _simulation_pool: pd.DataFrame | None = None
 _simulation_pool_lock = Lock()
 
 
-def construir_features(dados: DadosPaciente) -> pd.DataFrame:
-    """Build one inference row with the shared training feature schema."""
-    return build_model_features(pd.DataFrame([dados.model_dump()]))
+def _carregar_lookup(path: Path, coluna: str) -> dict[tuple[int, int], float]:
+    """Lê um artefato (município, semana-do-ano) -> valor típico.
+
+    Features de contexto epidemiológico não são deriváveis de uma notificação
+    isolada, então são consultadas aqui. Ausência do artefato ou da chave ->
+    NaN, e os modelos de árvore lidam nativamente.
+    """
+    if not path.exists():
+        return {}
+    try:
+        frame = pd.read_parquet(path)
+        return {
+            (int(row.residence_municipality), int(row.epi_week_of_year)): float(
+                getattr(row, coluna)
+            )
+            for row in frame.itertuples(index=False)
+        }
+    except Exception:
+        logger.exception("Não foi possível carregar %s", path)
+        return {}
+
+
+LOCAL_DENSITY_LOOKUP = _carregar_lookup(LOCAL_DENSITY_LOOKUP_PATH, "local_density")
+LOCAL_POSITIVITY_LOOKUP = _carregar_lookup(
+    LOCAL_POSITIVITY_LOOKUP_PATH, "local_positivity"
+)
+
+
+def _consultar_local(
+    dados: DadosPaciente, lookup: dict[tuple[int, int], float]
+) -> list[float] | None:
+    municipio = dados.residence_municipality
+    semana = dados.notification_epi_week
+    if municipio is None or semana is None:
+        return None
+    valor = lookup.get((int(municipio), int(semana) % 100))
+    return None if valor is None else [valor]
+
+
+def construir_features(
+    dados: DadosPaciente,
+    local_density: list[float] | None = None,
+    local_positivity: list[float] | None = None,
+) -> pd.DataFrame:
+    """Build one inference row with the shared training feature schema.
+
+    Se ``local_density``/``local_positivity`` forem passados (caso histórico da
+    simulação, com o valor exato de 2021), usa-os; senão consulta o lookup
+    (paciente novo do /predict).
+    """
+    if local_density is None:
+        local_density = _consultar_local(dados, LOCAL_DENSITY_LOOKUP)
+    if local_positivity is None:
+        local_positivity = _consultar_local(dados, LOCAL_POSITIVITY_LOOKUP)
+    return build_model_features(
+        pd.DataFrame([dados.model_dump()]),
+        local_density=local_density,
+        local_positivity=local_positivity,
+    )
 
 
 def _colunas_esperadas(modelo):
@@ -654,8 +754,14 @@ def _build_simulation_pool() -> pd.DataFrame:
     try:
         source = pd.read_parquet(
             SIMULATION_SOURCE_PARQUET,
-            columns=list(SIMULATION_POOL_COLUMNS),
+            columns=list(
+                SIMULATION_SOURCE_COLUMNS + SIMULATION_DERIVED_COLUMNS
+            ),
         )
+        # Contexto epidemiológico calculado sobre TODAS as notificações de 2021
+        # (antes de filtrar), para bater exatamente com o dataset de treino/teste.
+        source["local_density"] = compute_local_density(source).to_numpy()
+        source["local_positivity"] = compute_local_positivity(source).to_numpy()
         dates = pd.to_datetime(source["notification_date"], errors="coerce")
         years = pd.to_numeric(
             source["notification_year"],
@@ -763,6 +869,8 @@ def escolher_caso_real_simulacao(seed: int | None = None) -> dict[str, Any]:
             "patient": patient,
             "case": anonymized_case,
             "observed_classification": observed,
+            "local_density": row.get("local_density"),
+            "local_positivity": row.get("local_positivity"),
         }
 
     raise HTTPException(
@@ -831,7 +939,13 @@ def simulation_random(payload: SimulacaoRandomRequest | None = None):
         )
 
     sample = escolher_caso_real_simulacao(seed=(payload.seed if payload else None))
-    features = construir_features(sample["patient"])
+    # Caso histórico: usa a densidade/positividade EXATAS de 2021 (as que o modelo
+    # viu no teste), não a média sazonal do lookup.
+    features = construir_features(
+        sample["patient"],
+        local_density=[float(sample["local_density"])],
+        local_positivity=[float(sample["local_positivity"])],
+    )
     prediction = _inferir_modelos(features)
 
     if prediction["ignored"]:

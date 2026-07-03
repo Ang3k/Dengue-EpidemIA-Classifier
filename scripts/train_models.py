@@ -104,10 +104,37 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Train dengue models with the 2014-2020 temporal split."
     )
-    parser.add_argument("--n-trials", type=int, default=200)
+    parser.add_argument("--n-trials", type=int, default=50)
     parser.add_argument("--max-epochs", type=int, default=150)
-    parser.add_argument("--tuning-sample-size", type=int, default=200_000)
+    parser.add_argument("--tuning-sample-size", type=int, default=100_000)
+    parser.add_argument(
+        "--mlp-hidden",
+        type=str,
+        default="1024,512,256,128",
+        help="Larguras das camadas ocultas da MLP, separadas por vírgula.",
+    )
+    parser.add_argument("--mlp-learning-rate", type=float, default=5e-4)
+    parser.add_argument("--mlp-batch-size", type=int, default=16_384)
+    parser.add_argument("--mlp-dropout", type=float, default=0.2)
+    parser.add_argument("--mlp-weight-decay", type=float, default=1e-4)
+    parser.add_argument("--mlp-patience", type=int, default=10)
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        help="Device da MLP e do XGBoost (cuda/cpu).",
+    )
+    parser.add_argument(
+        "--lgbm-device",
+        type=str,
+        default="cpu",
+        help=(
+            "Device do LightGBM (cpu/gpu). O GPU do LGBM (OpenCL) nem sempre é "
+            "mais rápido que a CPU e limita max_bin a 255; teste antes."
+        ),
+    )
     args = parser.parse_args()
+    mlp_hidden = tuple(int(size) for size in args.mlp_hidden.split(",") if size)
 
     memory_monitor = PeakMemoryMonitor()
     memory_monitor.start()
@@ -119,6 +146,12 @@ def main() -> None:
 
     X_train, y_train = split_features_target(train_dataset)
     X_validation, y_validation = split_features_target(validation_dataset)
+    if X_train["local_density"].isna().all() or X_train["local_positivity"].isna().all():
+        raise RuntimeError(
+            "local_density/local_positivity estão vazias. Rode "
+            "scripts/augment_local_density.py depois de prepare_dengue_data.py "
+            "e antes de treinar."
+        )
     train_rows = len(train_dataset)
     validation_rows = len(validation_dataset)
     if train_rows != EXPECTED_SPLIT_ROWS["train"]:
@@ -136,26 +169,26 @@ def main() -> None:
 
     models = {
         "mlp": MLPDiseaseClassifier(
-            hidden_layers=(1024, 512, 256, 128),
+            hidden_layers=mlp_hidden,
             embedding_dropout=0.1,
-            hidden_dropout=0.2,
-            batch_size=16_384,
-            learning_rate=1e-3,
-            weight_decay=1e-4,
+            hidden_dropout=args.mlp_dropout,
+            batch_size=args.mlp_batch_size,
+            learning_rate=args.mlp_learning_rate,
+            weight_decay=args.mlp_weight_decay,
             max_epochs=args.max_epochs,
-            patience=10,
-            device="cuda",
+            patience=args.mlp_patience,
+            device=args.device,
             random_state=42,
         ),
         "xgboost": GradientBoostingDiseaseClassifier(
             model="xgb",
             fast_train=False,
-            device="cpu",
+            device=args.device,
         ),
         "lightgbm": GradientBoostingDiseaseClassifier(
             model="lgbm",
             fast_train=False,
-            device="cpu",
+            device=args.lgbm_device,
         ),
     }
 

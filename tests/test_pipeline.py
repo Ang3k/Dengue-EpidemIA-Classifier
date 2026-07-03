@@ -161,7 +161,7 @@ class TemporalAndManifestTestCase(unittest.TestCase):
         validation = set(VALIDATION_YEARS)
         test = set(TEST_YEARS)
 
-        self.assertEqual(TRAIN_YEARS, tuple(range(2014, 2020)))
+        self.assertEqual(TRAIN_YEARS, (2017, 2018, 2019))
         self.assertEqual(VALIDATION_YEARS, (2020,))
         self.assertEqual(TEST_YEARS, (2021,))
         self.assertFalse(train & validation)
@@ -226,7 +226,7 @@ class TemporalAndManifestTestCase(unittest.TestCase):
         self.assertEqual(sum(labeled_by_year.values()), 9_995_416)
         self.assertEqual(
             sum(labeled_by_year[year] for year in TRAIN_YEARS),
-            7_723_448,
+            2_874_235,
         )
         self.assertEqual(labeled_by_year[2020], 1_331_664)
         self.assertEqual(labeled_by_year[2021], 940_304)

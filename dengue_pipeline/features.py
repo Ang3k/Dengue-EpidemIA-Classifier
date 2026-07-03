@@ -6,7 +6,11 @@ import numpy as np
 import pandas as pd
 
 
-FEATURE_SCHEMA_VERSION = "2.0.0"
+FEATURE_SCHEMA_VERSION = "2.2.0"
+
+# Janela (em semanas epidemiológicas) usada para medir a circulação local
+# recente de dengue. Só olha o passado (semanas anteriores) para não vazar.
+LOCAL_DENSITY_WINDOW_WEEKS = 4
 
 SYMPTOM_COLUMNS = (
     "fever",
@@ -61,6 +65,8 @@ MODEL_FEATURE_COLUMNS = (
     "number_of_reported_symptoms",
     "pregnancy",
     "pregnancy_informed",
+    "local_density",
+    "local_positivity",
 )
 
 DATASET_METADATA_COLUMNS = (
@@ -104,12 +110,173 @@ def _normalized_symptom(frame: pd.DataFrame, column: str) -> pd.Series:
     return result
 
 
-def build_model_features(frame: pd.DataFrame) -> pd.DataFrame:
+def compute_local_density(frame: pd.DataFrame) -> pd.Series:
+    """Circulação local recente: notificações do mesmo município nas semanas
+    epidemiológicas anteriores (janela de ``LOCAL_DENSITY_WINDOW_WEEKS``).
+
+    Leakage-safe: usa apenas contagens de notificações (não rótulos) e apenas
+    de semanas passadas, dentro do mesmo ano. Vetorizado. Retorna log1p da
+    contagem para comprimir a faixa dinâmica.
+    """
+    year = _numeric(frame, "notification_year").astype("float64")
+    municipality = _numeric(frame, "residence_municipality").astype("float64")
+    # notification_epi_week vem como código AAAASS (ex.: 202005). A semana do
+    # ano (1-53) é o resto por 100.
+    week = (_numeric(frame, "notification_epi_week") % 100).astype("float64")
+
+    keys = pd.DataFrame({"y": year, "m": municipality, "w": week})
+    valid = keys.notna().all(axis=1)
+    counts = (
+        keys[valid]
+        .groupby(["y", "m", "w"])
+        .size()
+        .rename("n")
+        .reset_index()
+    )
+    if counts.empty:
+        return pd.Series(np.nan, index=frame.index, dtype="float32")
+
+    weeks = np.arange(1.0, 54.0)
+    grid = counts.pivot_table(
+        index=["y", "m"],
+        columns="w",
+        values="n",
+        fill_value=0.0,
+    ).reindex(columns=weeks, fill_value=0.0)
+    prior = sum(
+        grid.shift(k, axis=1, fill_value=0.0)
+        for k in range(1, LOCAL_DENSITY_WINDOW_WEEKS + 1)
+    )
+    prior_long = prior.stack()
+    prior_long.index = prior_long.index.set_names(["y", "m", "w"])
+
+    lookup = pd.MultiIndex.from_arrays(
+        [year.to_numpy(), municipality.to_numpy(), week.to_numpy()],
+        names=["y", "m", "w"],
+    )
+    density = prior_long.reindex(lookup).to_numpy()
+    return pd.Series(np.log1p(density), index=frame.index, dtype="float32")
+
+
+def build_local_density_lookup(frame: pd.DataFrame) -> pd.DataFrame:
+    """Tabela de serving: densidade típica por (município, semana), média entre
+    os anos disponíveis. A API usa isto para uma notificação isolada, já que a
+    densidade não é derivável de uma única linha.
+    """
+    density = compute_local_density(frame)
+    table = pd.DataFrame(
+        {
+            "residence_municipality": _numeric(
+                frame, "residence_municipality"
+            ),
+            "epi_week_of_year": _numeric(frame, "notification_epi_week") % 100,
+            "local_density": density,
+        }
+    ).dropna()
+    return (
+        table.groupby(["residence_municipality", "epi_week_of_year"])[
+            "local_density"
+        ]
+        .mean()
+        .reset_index()
+    )
+
+
+def compute_local_positivity(frame: pd.DataFrame) -> pd.Series:
+    """Taxa de confirmação local recente: dos casos do mesmo município nas
+    semanas anteriores, a fração confirmada (confirmados / rotulados).
+
+    Leakage-safe: usa apenas semanas passadas, dentro do mesmo ano. A
+    confirmação do próprio caso nunca entra. NaN quando não há casos rotulados
+    anteriores.
+    """
+    year = _numeric(frame, "notification_year").astype("float64")
+    municipality = _numeric(frame, "residence_municipality").astype("float64")
+    week = (_numeric(frame, "notification_epi_week") % 100).astype("float64")
+    code = _numeric(frame, "final_classification_code")
+    confirmed = code.isin([10, 11, 12]).astype("float64")
+    labeled = code.isin([10, 11, 12, 5]).astype("float64")
+
+    keys = pd.DataFrame(
+        {"y": year, "m": municipality, "w": week, "c": confirmed, "n": labeled}
+    )
+    valid = keys[["y", "m", "w"]].notna().all(axis=1)
+    agg = (
+        keys[valid]
+        .groupby(["y", "m", "w"])
+        .agg(c=("c", "sum"), n=("n", "sum"))
+    )
+    if agg.empty:
+        return pd.Series(np.nan, index=frame.index, dtype="float32")
+
+    weeks = np.arange(1.0, 54.0)
+    confirmed_grid = agg["c"].unstack(fill_value=0.0).reindex(
+        columns=weeks, fill_value=0.0
+    )
+    labeled_grid = agg["n"].unstack(fill_value=0.0).reindex(
+        columns=weeks, fill_value=0.0
+    )
+    confirmed_prior = sum(
+        confirmed_grid.shift(k, axis=1, fill_value=0.0)
+        for k in range(1, LOCAL_DENSITY_WINDOW_WEEKS + 1)
+    )
+    labeled_prior = sum(
+        labeled_grid.shift(k, axis=1, fill_value=0.0)
+        for k in range(1, LOCAL_DENSITY_WINDOW_WEEKS + 1)
+    )
+    rate = confirmed_prior / labeled_prior.where(labeled_prior > 0)
+    rate_long = rate.stack()
+    rate_long.index = rate_long.index.set_names(["y", "m", "w"])
+
+    lookup = pd.MultiIndex.from_arrays(
+        [year.to_numpy(), municipality.to_numpy(), week.to_numpy()],
+        names=["y", "m", "w"],
+    )
+    return pd.Series(
+        rate_long.reindex(lookup).to_numpy(),
+        index=frame.index,
+        dtype="float32",
+    )
+
+
+def build_local_positivity_lookup(frame: pd.DataFrame) -> pd.DataFrame:
+    """Tabela de serving: taxa de confirmação típica por (município, semana),
+    média entre os anos disponíveis.
+    """
+    positivity = compute_local_positivity(frame)
+    table = pd.DataFrame(
+        {
+            "residence_municipality": _numeric(
+                frame, "residence_municipality"
+            ),
+            "epi_week_of_year": _numeric(frame, "notification_epi_week") % 100,
+            "local_positivity": positivity,
+        }
+    ).dropna()
+    return (
+        table.groupby(["residence_municipality", "epi_week_of_year"])[
+            "local_positivity"
+        ]
+        .mean()
+        .reset_index()
+    )
+
+
+def build_model_features(
+    frame: pd.DataFrame,
+    local_density: pd.Series | np.ndarray | None = None,
+    local_positivity: pd.Series | np.ndarray | None = None,
+) -> pd.DataFrame:
     """Build the exact model matrix used by training and online inference.
 
     This transformation is deliberately stateless. Any learned preprocessing
     (categorical vocabularies and numerical medians) belongs to each fitted
     model and must only be learned from the training period.
+
+    ``local_density`` é injetada de fora (calculada offline sobre o ano inteiro
+    no treino, ou consultada num lookup no serving), pois depende de contexto
+    de grupo e não pode ser derivada de uma linha isolada. Se ausente, fica NaN
+    e os modelos de árvore lidam nativamente; a MLP imputa pela mediana.
     """
 
     data: dict[str, pd.Series] = {}
@@ -201,6 +368,25 @@ def build_model_features(frame: pd.DataFrame) -> pd.DataFrame:
     data["pregnancy_informed"] = pregnancy_status.isin(
         [1, 2, 3, 4, 5]
     ).astype("float32")
+
+    def _injected(values, name):
+        if values is None:
+            return np.full(len(frame), np.nan, dtype="float32")
+        array = np.asarray(values, dtype="float32").reshape(-1)
+        if len(array) != len(frame):
+            raise ValueError(f"{name} length must match the number of rows")
+        return array
+
+    data["local_density"] = pd.Series(
+        _injected(local_density, "local_density"),
+        index=frame.index,
+        dtype="float32",
+    )
+    data["local_positivity"] = pd.Series(
+        _injected(local_positivity, "local_positivity"),
+        index=frame.index,
+        dtype="float32",
+    )
 
     features = pd.DataFrame(data, index=frame.index)
     missing = set(MODEL_FEATURE_COLUMNS) - set(features.columns)

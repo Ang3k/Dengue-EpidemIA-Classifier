@@ -46,6 +46,7 @@ from dengue_pipeline.paths import (  # noqa: E402
     MODEL_MANIFEST_PATH,
     MODELS_DIR,
     TEST_YEARS,
+    TRAIN_YEARS,
     VALIDATION_YEARS,
 )
 
@@ -112,8 +113,12 @@ def threshold_metrics(
 
 
 def select_threshold(metrics: pd.DataFrame) -> pd.Series:
+    # Youden J = sensibilidade + especificidade - 1, que é monotônico com a
+    # balanced accuracy. Escolhe um ponto de operação equilibrado em vez de
+    # maximizar F1 (que, sob a prevalência de 2020, empurrava o limiar pra
+    # baixo e fazia o modelo prever "confirmado" pra quase todo mundo).
     return metrics.sort_values(
-        ["f1", "recall"],
+        ["balanced_accuracy", "f1"],
         ascending=False,
     ).iloc[0]
 
@@ -249,7 +254,18 @@ def main() -> None:
         description="Calibrate on 2020 and evaluate once on 2021."
     )
     parser.add_argument("--threshold-step", type=float, default=0.01)
+    parser.add_argument(
+        "--ensemble-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Fixa o limiar do ensemble (ponto de operação de deploy) em vez de "
+            "selecioná-lo por balanced accuracy. Ex.: 0.2 para alta sensibilidade."
+        ),
+    )
     args = parser.parse_args()
+    if args.ensemble_threshold is not None and not 0 < args.ensemble_threshold < 1:
+        parser.error("--ensemble-threshold deve estar entre 0 e 1")
 
     manifest = json.loads(
         MODEL_MANIFEST_PATH.read_text(encoding="utf-8")
@@ -259,9 +275,9 @@ def main() -> None:
         or manifest.get("feature_columns") != list(MODEL_FEATURE_COLUMNS)
         or manifest.get("periods")
         != {
-            "train": [2014, 2015, 2016, 2017, 2018, 2019],
-            "validation": [2020],
-            "test": [2021],
+            "train": list(TRAIN_YEARS),
+            "validation": list(VALIDATION_YEARS),
+            "test": list(TEST_YEARS),
         }
         or manifest.get("row_counts") != EXPECTED_SPLIT_ROWS
     ):
@@ -306,7 +322,7 @@ def main() -> None:
             {
                 "model": name,
                 "selection_split": "validation",
-                "rule": "max_f1_then_recall",
+                "rule": "max_balanced_accuracy",
                 **selected.to_dict(),
             }
         )
@@ -328,18 +344,24 @@ def main() -> None:
         thresholds,
     )
     ensemble_selected = select_threshold(ensemble_validation_metrics)
+    if args.ensemble_threshold is not None:
+        ensemble_threshold = round(float(args.ensemble_threshold), 4)
+        threshold_rule = "manual_operating_point"
+    else:
+        ensemble_threshold = float(ensemble_selected["threshold"])
+        threshold_rule = "max_balanced_accuracy"
     ensemble_validation_metrics["selected"] = np.isclose(
         ensemble_validation_metrics["threshold"],
-        ensemble_selected["threshold"],
+        ensemble_threshold,
     )
     validation_frames.append(ensemble_validation_metrics)
-    ensemble_threshold = float(ensemble_selected["threshold"])
     selected_rows.append(
         {
             "model": "ensemble",
             "selection_split": "validation",
-            "rule": "max_f1_then_recall",
+            "rule": threshold_rule,
             **ensemble_selected.to_dict(),
+            "threshold": ensemble_threshold,
         }
     )
 
@@ -347,7 +369,7 @@ def main() -> None:
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "selection_period": list(VALIDATION_YEARS),
         "test_period": list(TEST_YEARS),
-        "threshold_rule": "max_f1_then_recall",
+        "threshold_rule": threshold_rule,
         "weight_rule": "normalized_validation_recall",
         "threshold": ensemble_threshold,
         "weights": weights,

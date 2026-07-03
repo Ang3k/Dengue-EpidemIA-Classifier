@@ -87,7 +87,7 @@
       "final_classification",
       "final_classification_label"
     ],
-    "feature_schema_version": "2.0.0",
+    "feature_schema_version": "2.2.0",
     "model_feature_columns": [
       "age_years",
       "education_level",
@@ -193,7 +193,9 @@
       "number_of_important_symptoms",
       "number_of_reported_symptoms",
       "pregnancy",
-      "pregnancy_informed"
+      "pregnancy_informed",
+      "local_density",
+      "local_positivity"
     ]
   },
   "years": {

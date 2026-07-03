@@ -32,5 +32,5 @@ data/raw/downloads/
 data/raw/parquet/
 data/processed/analysis/
 data/processed/ml/
-data/processed/dengue_tratado_ml.parquet
+data/processed/dengue_tratado*.parquet
 *.pyc

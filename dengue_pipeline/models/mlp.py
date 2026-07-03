@@ -7,7 +7,12 @@ import pandas as pd
 import torch
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.inspection import permutation_importance
-from sklearn.metrics import f1_score, precision_score, recall_score
+from sklearn.metrics import (
+    average_precision_score,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder
 from torch import nn
@@ -214,14 +219,14 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
         )
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
-            mode="min",
+            mode="max",
             patience=4,
             factor=0.5,
             min_lr=1e-6,
         )
 
         best_state = None
-        best_validation_loss = float("inf")
+        best_validation_score = float("-inf")
         epochs_without_improvement = 0
         self.history_ = []
 
@@ -232,12 +237,12 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
                 optimizer,
                 runtime_device,
             )
-            validation_loss = self._validation_loss(
+            validation_loss, validation_pr_auc = self._validation_metrics(
                 validation_loader,
                 criterion,
                 runtime_device,
             )
-            scheduler.step(validation_loss)
+            scheduler.step(validation_pr_auc)
 
             learning_rate = optimizer.param_groups[0]["lr"]
             self.history_.append(
@@ -245,19 +250,21 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
                     "epoch": float(epoch),
                     "training_loss": training_loss,
                     "validation_loss": validation_loss,
+                    "validation_pr_auc": validation_pr_auc,
                     "learning_rate": float(learning_rate),
                 }
             )
             if self.verbose:
                 print(
                     f"Época {epoch:03d} | treino: {training_loss:.5f} | "
-                    f"validação: {validation_loss:.5f} | "
+                    f"val_loss: {validation_loss:.5f} | "
+                    f"val_PR-AUC: {validation_pr_auc:.5f} | "
                     f"lr: {learning_rate:.2e}",
                     flush=True,
                 )
 
-            if validation_loss < best_validation_loss - 1e-6:
-                best_validation_loss = validation_loss
+            if validation_pr_auc > best_validation_score + 1e-6:
+                best_validation_score = validation_pr_auc
                 best_state = {
                     name: value.detach().cpu().clone()
                     for name, value in self.model.state_dict().items()
@@ -291,7 +298,7 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
             target=None,
             shuffle=False,
         )
-        runtime_device = self._resolve_device()
+        runtime_device = self._inference_device()
         self.model.to(runtime_device)
         self.model.eval()
 
@@ -600,7 +607,7 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
             shuffle=shuffle,
             drop_last=shuffle and len(categorical) > self.batch_size,
             num_workers=self.num_workers,
-            pin_memory=self._resolve_device().type == "cuda",
+            pin_memory=torch.cuda.is_available(),
             persistent_workers=self.num_workers > 0,
             generator=generator if shuffle else None,
         )
@@ -628,14 +635,16 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
 
         return total_loss / len(loader.dataset)
 
-    def _validation_loss(
+    def _validation_metrics(
         self,
         loader: DataLoader,
         criterion,
         device: torch.device,
-    ) -> float:
+    ) -> tuple[float, float]:
         self.model.eval()
         total_loss = 0.0
+        probabilities: list[np.ndarray] = []
+        targets: list[np.ndarray] = []
         with torch.inference_mode():
             for categorical, numerical, target in loader:
                 categorical = categorical.to(device, non_blocking=True)
@@ -643,7 +652,16 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
                 target = target.to(device, non_blocking=True)
                 logits = self.model(categorical, numerical)
                 total_loss += criterion(logits, target).item() * len(target)
-        return total_loss / len(loader.dataset)
+                probabilities.append(torch.sigmoid(logits).cpu().numpy())
+                targets.append(target.cpu().numpy())
+        loss = total_loss / len(loader.dataset)
+        pr_auc = float(
+            average_precision_score(
+                np.concatenate(targets),
+                np.concatenate(probabilities),
+            )
+        )
+        return loss, pr_auc
 
     def _resolve_device(self) -> torch.device:
         requested = self.device.lower()
@@ -656,6 +674,15 @@ class MLPDiseaseClassifier(ClassifierMixin, BaseEstimator):
         if requested not in {"cpu", "cuda"}:
             raise ValueError("device deve ser 'auto', 'cpu', 'cuda' ou 'gpu'.")
         return torch.device(requested)
+
+    def _inference_device(self) -> torch.device:
+        """Device para inferência: usa CUDA se houver, senão CPU.
+
+        Diferente de ``_resolve_device``, nunca levanta erro — um modelo
+        treinado na GPU precisa prever normalmente em máquinas sem CUDA
+        (por exemplo, a API em produção).
+        """
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def _seed_everything(self) -> None:
         np.random.seed(self.random_state)

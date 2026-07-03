@@ -146,7 +146,15 @@ class ApiTestCase(unittest.TestCase):
 
         row = pool.iloc[0]
         patient = api._build_patient_from_sample(row)
-        expected = build_model_features(pd.DataFrame([row]))
+        # local_density/local_positivity são injetadas de fora (lookup no
+        # serving); o pipeline precisa da mesma fonte para a paridade valer.
+        expected = build_model_features(
+            pd.DataFrame([row]),
+            local_density=api._consultar_local(patient, api.LOCAL_DENSITY_LOOKUP),
+            local_positivity=api._consultar_local(
+                patient, api.LOCAL_POSITIVITY_LOOKUP
+            ),
+        )
         received = api.construir_features(patient)
         pd.testing.assert_frame_equal(received, expected)
 

@@ -1,2 +1,2 @@
-﻿split,period_start,period_end,n_samples,n_features,n_confirmed,n_discarded,positive_rate
-test,2019-06,2019-12,528608,105,309627,218981,0.5857402839154913
+split,period_start,period_end,n_samples,n_features,n_confirmed,n_discarded,positive_rate
+test,2021-01,2021-12,940304,107,455718,484586,0.48464964522112

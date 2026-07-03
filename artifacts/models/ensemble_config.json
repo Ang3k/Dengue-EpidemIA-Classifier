@@ -1,0 +1,18 @@
+{
+  "feature_schema_version": "2.2.0",
+  "selection_period": [
+    2020
+  ],
+  "test_period": [
+    2021
+  ],
+  "threshold_rule": "manual_operating_point",
+  "weight_rule": "normalized_validation_recall",
+  "threshold": 0.3,
+  "weights": {
+    "mlp": 0.33247739701558165,
+    "xgboost": 0.3355926241446591,
+    "lightgbm": 0.3319299788397593
+  },
+  "model_manifest_sha256": "78e00aba2ab8982de9b36dd393e1431b47a8b19190ddcea062d147dcaed91bf3"
+}
