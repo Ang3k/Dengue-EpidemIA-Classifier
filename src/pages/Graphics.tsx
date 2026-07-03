@@ -22,7 +22,7 @@ const analises: Analise[] = [
       {
         src: casosPorMes,
         alt: "Gráfico de barras com o total de casos de dengue por mês entre 2017 e 2019",
-        legenda: "Total de casos de dengue por mês — 2017 a 2019",
+        legenda: "Total de casos de dengue por mês, 2017 a 2019",
       },
     ],
     insights: [
@@ -39,7 +39,7 @@ const analises: Analise[] = [
       {
         titulo: "Vale no inverno/primavera",
         texto:
-          "Queda expressiva de agosto a outubro (69 a 85 mil casos), mas nunca chega a zero — o Aedes mantém atividade o ano todo.",
+          "Queda expressiva de agosto a outubro (69 a 85 mil casos), mas nunca chega a zero: o Aedes mantém atividade o ano todo.",
       },
     ],
   },
@@ -58,7 +58,7 @@ const analises: Analise[] = [
       {
         titulo: "Tríade dominante",
         texto:
-          "Febre (85,9%), cefaleia (80,2%) e mialgia (79,6%) passam de 79% nos confirmados — são quase universais e pouco discriminantes quando vistos isolados.",
+          "Febre (85,9%), cefaleia (80,2%) e mialgia (79,6%) passam de 79% nos confirmados: são quase universais e pouco discriminantes quando vistos isolados.",
       },
       {
         titulo: "Maior diferença proporcional",
@@ -68,7 +68,7 @@ const analises: Analise[] = [
       {
         titulo: "Dor retro-orbital",
         texto:
-          "37,6% nos confirmados vs 26,8% nos descartados — uma diferença expressiva e consistente com a clínica clássica da dengue.",
+          "37,6% nos confirmados vs 26,8% nos descartados, uma diferença expressiva e consistente com a clínica clássica da dengue.",
       },
     ],
   },
@@ -86,7 +86,7 @@ const analises: Analise[] = [
       {
         titulo: "Distribuição",
         texto:
-          "933.052 casos femininos (55,7%) contra 743.044 masculinos (44,3%) — uma diferença de cerca de 190 mil casos em 3 anos.",
+          "933.052 casos femininos (55,7%) contra 743.044 masculinos (44,3%), uma diferença de cerca de 190 mil casos em 3 anos.",
       },
       {
         titulo: "Hipótese de exposição",
@@ -107,12 +107,12 @@ const analises: Analise[] = [
       {
         src: ocupacoesFeminino,
         alt: "Ocupações com maior registro de casos confirmados entre mulheres",
-        legenda: "Ocupações — Feminino",
+        legenda: "Ocupações (Feminino)",
       },
       {
         src: ocupacoesMasculino,
         alt: "Ocupações com maior registro de casos confirmados entre homens",
-        legenda: "Ocupações — Masculino",
+        legenda: "Ocupações (Masculino)",
       },
     ],
     insights: [

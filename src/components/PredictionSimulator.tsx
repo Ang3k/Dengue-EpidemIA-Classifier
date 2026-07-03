@@ -65,6 +65,10 @@ function PredictionSimulator() {
     }
   }
 
+  const realidadeDengue = (classificacaoObservada ?? "")
+    .toLowerCase()
+    .includes("dengue");
+
   return (
     <div className="home-section">
       <h2>Simulação de predição</h2>
@@ -74,12 +78,11 @@ function PredictionSimulator() {
         pré-processamento do treino e retorna o resultado completo.
       </p>
 
-      <button type="button" className="btn-primary" onClick={handleGerar}>
-        {carregando ? "Carregando caso histórico..." : "Gerar simulação real"}
-      </button>
+      {erro && <p style={{ color: "#dc2626", fontWeight: 600 }}>{erro}</p>}
 
-      {pessoa && (
+      {pessoa && predicao && (
         <div className="sim-card">
+          {/* Topo: dados da pessoa */}
           <div className="sim-dados">
             <div className="sim-campo">
               <span className="sim-label">Idade</span>
@@ -105,7 +108,9 @@ function PredictionSimulator() {
             </div>
             <div className="sim-campo sim-campo-largo">
               <span className="sim-label">Município</span>
-              <span className="sim-valor">{pessoa.municipio ?? "Não informado"}</span>
+              <span className="sim-valor">
+                {pessoa.municipio ?? "Não informado"}
+              </span>
             </div>
           </div>
 
@@ -120,69 +125,65 @@ function PredictionSimulator() {
             </div>
           </div>
 
-          {classificacaoObservada && (
-            <div className="sim-media sim-media-observada">
-              <span className="sim-label">Classificação observada</span>
-              <span className="sim-valor-destaque">{classificacaoObservada}</span>
-              <small className="sim-media-apoio">
-                Este é o diagnóstico registrado na base histórica. Pode divergir
-                da predição dos modelos.
+          {/* Meio: bloquinhos dos modelos */}
+          <span className="sim-label">Resultado dos modelos</span>
+          <div className="modelo-quadrados">
+            {predicao.modelos.map((modelo) => (
+              <div className="modelo-quadrado" key={modelo.name}>
+                <span className="modelo-quadrado-nome">
+                  {formatModelName(modelo.name)}
+                </span>
+                <span className="modelo-quadrado-prob">
+                  {modelo.probability}%
+                </span>
+                <span className="modelo-quadrado-legenda">prob. de dengue</span>
+                <span className="modelo-quadrado-peso">
+                  Peso no ensemble: {modelo.weight}%
+                </span>
+              </div>
+            ))}
+          </div>
+
+          {/* Baixo: previsão final (esquerda) x realidade (direita) */}
+          <div className="sim-final-grid">
+            <div
+              className={`sim-veredito ${
+                predicao.ehDengue ? "sim-veredito-dengue" : "sim-veredito-nao"
+              }`}
+            >
+              <span className="sim-veredito-titulo">
+                Previsão do modelo (ensemble)
+              </span>
+              {predicao.ehDengue ? "É dengue" : "Não é dengue"}
+              <small>
+                Score {predicao.media}%, limiar de {predicao.threshold}%
               </small>
             </div>
-          )}
 
-          {erro && (
-            <p style={{ color: "red", marginTop: "1rem" }}>{erro}</p>
-          )}
-
-          {predicao && (
-            <div className="sim-predicao">
-              <span className="sim-label">Resultado dos modelos</span>
-
-              <div className="sim-modelos">
-                {predicao.modelos.map((modelo) => (
-                  <div key={modelo.name} className="sim-modelo">
-                    <div className="sim-modelo-topo">
-                      <span className="sim-modelo-nome">
-                        {formatModelName(modelo.name)}
-                        <small className="sim-modelo-peso">
-                          Peso: {modelo.weight}%
-                        </small>
-                      </span>
-                      <span className="sim-modelo-prob">
-                        {modelo.probability}%
-                      </span>
-                    </div>
-                    <div className="sim-barra">
-                      <div
-                        className="sim-barra-preench"
-                        style={{ width: `${modelo.probability}%` }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="sim-media">
-                <span className="sim-label">Score ponderado por recall</span>
-                <span className="sim-valor-destaque">{predicao.media}%</span>
-              </div>
-
-              <div
-                className={`sim-veredito ${
-                  predicao.ehDengue ? "sim-veredito-dengue" : "sim-veredito-nao"
-                }`}
-              >
-                {predicao.ehDengue ? "É dengue" : "Não é dengue"}
-                <small>
-                  Score {predicao.ehDengue ? "acima" : "abaixo"} do limiar de{" "}
-                  {predicao.threshold}%
-                </small>
-              </div>
+            <div
+              className={`sim-veredito ${
+                realidadeDengue ? "sim-veredito-dengue" : "sim-veredito-nao"
+              }`}
+            >
+              <span className="sim-veredito-titulo">
+                Realidade (base histórica)
+              </span>
+              {classificacaoObservada ?? "Não informado"}
+              <small>Diagnóstico registrado no SINAN</small>
             </div>
-          )}
+          </div>
         </div>
       )}
+
+      {/* Botão sempre no final, para gerar uma nova sem rolar para cima */}
+      <button
+        type="button"
+        className="btn-primary"
+        onClick={handleGerar}
+        disabled={carregando}
+      >
+        {carregando ? "Carregando caso histórico..." : "Gerar simulação real"}
+      </button>
     </div>
   );
 }

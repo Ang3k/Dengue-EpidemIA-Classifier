@@ -332,7 +332,7 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
           </select>
         </div>
 
-        {/* Ocupação — autocomplete */}
+        {/* Ocupação: autocomplete */}
         <div className="form-group form-group-wide">
           <Autocomplete
             id="occupationName"
@@ -371,13 +371,13 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
             <option value="">Selecione</option>
             {(options?.ufs ?? []).map(uf => (
               <option key={uf.code} value={uf.code}>
-                {uf.sigla} — {uf.name}
+                {uf.sigla} ({uf.name})
               </option>
             ))}
           </select>
         </div>
 
-        {/* Município de residência — autocomplete */}
+        {/* Município de residência: autocomplete */}
         <div className="form-group form-group-wide">
           <Autocomplete
             id="residenceMunicipality"
@@ -387,7 +387,7 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
             displayValue={patientData.residenceMunicipality}
             onSelect={aoSelecionarMunicipio}
             renderLabel={item =>
-              item.state ? `${item.name} — ${item.state}` : item.name
+              item.state ? `${item.name} (${item.state})` : item.name
             }
           />
           {patientData.residenceMunicipality && (
@@ -395,7 +395,7 @@ function PatientForm({ patientData, setPatientData }: PatientFormProps) {
           )}
         </div>
 
-        {/* Região de saúde — preenchida automaticamente ou select se houver mais de uma */}
+        {/* Região de saúde: preenchida automaticamente ou select se houver mais de uma */}
        
 
         {/* Data dos primeiros sintomas */}

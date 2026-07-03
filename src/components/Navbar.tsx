@@ -18,6 +18,10 @@ function Navbar() {
             Triagem
           </NavLink>
 
+          <NavLink to="/pipeline" className="navbar-link">
+            Pipeline
+          </NavLink>
+
           <NavLink to="/graphics" className="navbar-link">
             Panorama Epidemiológico
           </NavLink>
