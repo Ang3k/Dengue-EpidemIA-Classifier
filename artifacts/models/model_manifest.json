@@ -127,20 +127,20 @@
     "validation": 1331664,
     "test": 940304
   },
-  "peak_training_rss_gib": 9.86,
+  "peak_training_rss_gib": 11.718,
   "data_manifest_sha256": "9a2ef58e1403ae702ee6ef9d662ef109e253d71db4f36599f615efb8d13d3300",
   "models": {
     "mlp": {
       "file": "mlp.joblib",
-      "sha256": "d861bbf82be3ad3d480f587bf2f30143de7d8bb78ae7ef0d83583d59a0057455"
+      "sha256": "a537829c820a6bcb5087ff68579097c37f580997102fd960a0c854a21c52b3d1"
     },
     "xgboost": {
       "file": "xgboost.joblib",
-      "sha256": "dc65d9b80ba0217bb2f14b243bce7391789fb57a13f7f52af493038770fa858c"
+      "sha256": "7362325d74b51f2d225f0090eb79f9532449e39f33ac8265a98a23f23d2e45f7"
     },
     "lightgbm": {
       "file": "lightgbm.joblib",
-      "sha256": "8d786b494f7f57961e47d460e791edcddbcf5121e8c67159bf8bfc28a87fd354"
+      "sha256": "c05bd01a1a71b1961847c3cb03e72b36595b74a326b7a41f01e4267344932357"
     }
   },
   "context_lookups": {

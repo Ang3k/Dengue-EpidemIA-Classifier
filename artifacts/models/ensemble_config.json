@@ -6,13 +6,13 @@
   "test_period": [
     2021
   ],
-  "threshold_rule": "manual_operating_point",
+  "threshold_rule": "max_balanced_accuracy",
   "weight_rule": "normalized_validation_recall",
-  "threshold": 0.3,
+  "threshold": 0.57,
   "weights": {
-    "mlp": 0.33247739701558165,
-    "xgboost": 0.3355926241446591,
-    "lightgbm": 0.3319299788397593
+    "mlp": 0.3315448553479668,
+    "xgboost": 0.3343269117738769,
+    "lightgbm": 0.3341282328781563
   },
-  "model_manifest_sha256": "221374013b8e1ffd279bce37321ab1b457b2f939e56afaa29a4556f348cb3eb5"
+  "model_manifest_sha256": "e7a5be633a8af3d86604c36adcdd14a6b0c990f384b2d94ca7da1c88cbdbcdce"
 }
